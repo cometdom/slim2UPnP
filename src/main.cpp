@@ -715,15 +715,16 @@ int main(int argc, char* argv[]) {
                                     // Prebuffer done — allow renderer to connect
                                     audioServerPtr->setReadyToServe();
 
+                                    pushedDsdBytes = 0;
                                     slimproto->updateElapsed(0, 0);
 
-                                    upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                    upnpPtr->play();
-
-                                    pushedDsdBytes = 0;
-
+                                    // Start UPnP playback in background thread
                                     serverReady = true;
-                                    slimproto->sendStat(StatEvent::STMl);
+                                    std::thread([upnpPtr, audioServerPtr, &slimproto]() {
+                                        upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
+                                        upnpPtr->play();
+                                        slimproto->sendStat(StatEvent::STMl);
+                                    }).detach();
                                 }
                                 continue;
                             }
@@ -1040,17 +1041,18 @@ int main(int argc, char* argv[]) {
                                 // Prebuffer done — now allow renderer to connect and read
                                 audioServerPtr->setReadyToServe();
 
-                                // Reset elapsed to 0: prebuffered frames are not playback time
+                                // Reset elapsed: prebuffered frames are not playback time
+                                pushedFrames = 0;
                                 slimproto->updateElapsed(0, 0);
 
-                                upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                upnpPtr->play();
-
-                                // Count elapsed from now (after Play), not from prebuffer start
-                                pushedFrames = 0;
-
+                                // Start UPnP playback in background thread
+                                // (SetAVTransportURI blocks for seconds while renderer connects)
                                 serverReady = true;
-                                slimproto->sendStat(StatEvent::STMl);
+                                std::thread([upnpPtr, audioServerPtr, &slimproto]() {
+                                    upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
+                                    upnpPtr->play();
+                                    slimproto->sendStat(StatEvent::STMl);
+                                }).detach();
                             }
                             continue;
                         }
