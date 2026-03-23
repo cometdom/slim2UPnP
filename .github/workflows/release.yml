@@ -1,0 +1,199 @@
+name: Build Release Binaries
+
+# Trigger on version tags (v0.0.1, v1.0.0, etc.)
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Also allow manual trigger for testing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================
+  # x86_64 builds (v2 baseline + v3 AVX2)
+  # ============================================================
+  build-x64:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - variant: x64-v2
+            march: v2
+            desc: "x86_64 baseline (any Intel/AMD 64-bit)"
+          - variant: x64-v3
+            march: v3
+            desc: "x86_64 AVX2 (Haswell 2013+)"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake \
+            libflac-dev libupnp-dev \
+            libmpg123-dev libvorbis-dev \
+            libavcodec-dev libavutil-dev \
+            libfdk-aac-dev
+
+      # For static builds we need the static libraries
+      - name: Install static libraries
+        run: |
+          sudo apt-get install -y \
+            libflac-dev libupnp-dev \
+            libmpg123-dev libvorbis-dev libogg-dev \
+            libfdk-aac-dev
+
+      - name: Build static binary (${{ matrix.variant }})
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTARGET_MARCH=${{ matrix.march }} \
+            -DSTATIC_BUILD=ON \
+            -DNOLOG=ON
+          cmake --build build -j$(nproc)
+
+      - name: Verify binary
+        run: |
+          file build/slim2upnp
+          build/slim2upnp --version
+
+      - name: Rename and strip binary
+        run: |
+          strip build/slim2upnp
+          cp build/slim2upnp slim2upnp-${{ matrix.variant }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slim2upnp-${{ matrix.variant }}
+          path: slim2upnp-${{ matrix.variant }}
+
+  # ============================================================
+  # aarch64 build (via QEMU emulation)
+  # ============================================================
+  build-aarch64:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU for ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build in ARM64 container
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build static binary (aarch64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}:/src \
+            -w /src \
+            ubuntu:24.04 bash -c '
+              apt-get update && apt-get install -y \
+                build-essential cmake \
+                libflac-dev libupnp-dev \
+                libmpg123-dev libvorbis-dev libogg-dev \
+                libavcodec-dev libavutil-dev \
+                libfdk-aac-dev
+              cmake -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DSTATIC_BUILD=ON \
+                -DNOLOG=ON
+              cmake --build build -j$(nproc)
+              strip build/slim2upnp
+            '
+
+      - name: Verify binary
+        run: |
+          file build/slim2upnp
+
+      - name: Rename binary
+        run: |
+          cp build/slim2upnp slim2upnp-aarch64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slim2upnp-aarch64
+          path: slim2upnp-aarch64
+
+  # ============================================================
+  # Create GitHub Release with all binaries
+  # ============================================================
+  release:
+    needs: [build-x64, build-aarch64]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp artifacts/slim2upnp-x64-v2/slim2upnp-x64-v2 release/
+          cp artifacts/slim2upnp-x64-v3/slim2upnp-x64-v3 release/
+          cp artifacts/slim2upnp-aarch64/slim2upnp-aarch64 release/
+          chmod +x release/*
+
+          # Generate checksums
+          cd release
+          sha256sum slim2upnp-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "slim2UPnP ${{ steps.version.outputs.version }}"
+          body: |
+            ## slim2UPnP ${{ steps.version.outputs.version }}
+
+            Slimproto to UPnP bridge with native DSD support.
+
+            ### Download
+
+            | Binary | Architecture | Target |
+            |--------|-------------|--------|
+            | `slim2upnp-x64-v2` | x86_64 baseline | Any Intel/AMD 64-bit PC |
+            | `slim2upnp-x64-v3` | x86_64 AVX2 | Modern PCs (Haswell 2013+) |
+            | `slim2upnp-aarch64` | ARM64 | Raspberry Pi 4/5, ARM servers |
+
+            All binaries are statically linked — no shared library dependencies.
+            Just download, `chmod +x`, and run.
+
+            ### Quick start
+
+            ```bash
+            chmod +x slim2upnp-x64-v2
+            sudo cp slim2upnp-x64-v2 /usr/local/bin/slim2upnp
+            slim2upnp --list-renderers
+            slim2upnp -r "My Renderer" -s <LMS_IP>
+            ```
+
+            Or use the installer: `sudo ./install.sh /path/to/slim2upnp-x64-v2`
+
+            See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation.
+          files: |
+            release/slim2upnp-x64-v2
+            release/slim2upnp-x64-v3
+            release/slim2upnp-aarch64
+            release/SHA256SUMS
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
