@@ -5,8 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=-/etc/default/slim2upnp
-ExecStart=/usr/local/bin/slim2upnp $SLIM2UPNP_OPTS
+ExecStart=/usr/local/bin/start-slim2upnp.sh
 User=root
 
 # Restart on failure (not on clean stop via SIGTERM)

@@ -344,6 +344,13 @@ install_binary() {
 
     info "Installing $BINARY_NAME to $INSTALL_DIR/"
     install -m 755 "$src" "$INSTALL_DIR/$BINARY_NAME"
+
+    # Install wrapper script
+    if [ -f "$DIST_DIR/start-slim2upnp.sh" ]; then
+        install -m 755 "$DIST_DIR/start-slim2upnp.sh" "$INSTALL_DIR/start-slim2upnp.sh"
+        info "Wrapper script: $INSTALL_DIR/start-slim2upnp.sh"
+    fi
+
     info "Installed: $INSTALL_DIR/$BINARY_NAME"
 }
 
@@ -451,8 +458,9 @@ do_uninstall() {
         info "OpenRC service removed"
     fi
 
-    # Remove binary
+    # Remove binary and wrapper
     rm -f "$INSTALL_DIR/$BINARY_NAME"
+    rm -f "$INSTALL_DIR/start-slim2upnp.sh"
     info "Binary removed: $INSTALL_DIR/$BINARY_NAME"
 
     # Keep config files (user may want them)

@@ -1,68 +1,58 @@
 # /etc/default/slim2upnp (systemd) or /etc/conf.d/slim2upnp (OpenRC)
 # Configuration for slim2UPnP service
 #
-# All options are passed via SLIM2UPNP_OPTS.
-# Run 'slim2upnp --help' for full option list.
-# Run 'slim2upnp --list-renderers' to find available UPnP renderers.
-#
 # ============================================================================
-# RENDERER SELECTION (required)
+# HOW TO CONFIGURE
 # ============================================================================
 #
-# By name (substring match — case-insensitive):
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\""
+# Step 1: Find your renderer
+#   Run:  slim2upnp --list-renderers
+#   Note the exact name shown (e.g., "Diretta Renderer")
 #
-# By UUID (exact match):
-#SLIM2UPNP_OPTS="--renderer-uuid uuid:diretta-renderer-12345"
+# Step 2: Set RENDERER below to that name
 #
-# By direct URL (skip SSDP discovery — useful for cross-subnet):
-#SLIM2UPNP_OPTS="--renderer-url http://192.168.1.104:4005/description.xml"
+# Step 3: Set LMS_SERVER if LMS is not auto-discovered
+#   (most setups auto-discover fine — leave empty to try)
 #
-# ============================================================================
-# LMS CONNECTION
-# ============================================================================
-#
-# LMS is auto-discovered if not specified.
-# To specify explicitly:
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" -s 192.168.1.10"
-#
-# With custom player name:
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" -s 192.168.1.10 -n \"Living Room\""
-#
-# ============================================================================
-# AUDIO OPTIONS
-# ============================================================================
-#
-# Disable DSD (force PCM only):
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" --no-dsd"
-#
-# Use FFmpeg decoder backend:
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" --decoder ffmpeg"
-#
-# ============================================================================
-# NETWORK OPTIONS
-# ============================================================================
-#
-# Force specific network interface:
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" --interface eth0"
-#
-# Force HTTP server port (default: auto):
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" --http-port 8080"
-#
-# ============================================================================
-# EXAMPLES
-# ============================================================================
-#
-# Minimal (auto-discover LMS, find renderer by name):
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\""
-#
-# Full setup with verbose logging:
-#SLIM2UPNP_OPTS="-r \"Diretta Renderer\" -s 192.168.1.10 -n \"Music Room\" -v"
-#
-# GentooPlayer / AudioLinux typical setup:
-#SLIM2UPNP_OPTS="--renderer-url http://192.168.1.104:4005/description.xml -s 192.168.1.10 -n slim2UPnP"
+# Step 4: Start the service
+#   systemd:  sudo systemctl start slim2upnp
+#   OpenRC:   sudo rc-service slim2upnp start
 #
 # ============================================================================
 
-# Default: empty (slim2upnp will fail without at least a renderer)
-SLIM2UPNP_OPTS=""
+# ── UPnP Renderer (required) ──────────────────────────────────────────────
+# Name of your UPnP renderer (substring match, case-insensitive).
+# Example: Diretta Renderer
+RENDERER=
+
+# Or use the direct URL instead of the name (skip network discovery):
+# Example: http://192.168.1.104:4005/description.xml
+RENDERER_URL=
+
+# ── LMS Server ────────────────────────────────────────────────────────────
+# IP address of your Logitech Media Server.
+# Leave empty for auto-discovery (works on most networks).
+LMS_SERVER=
+
+# ── Player Name ───────────────────────────────────────────────────────────
+# Name shown in LMS interface. Leave empty for default "slim2UPnP".
+PLAYER_NAME=
+
+# ── Audio Options ─────────────────────────────────────────────────────────
+# Set to "yes" to disable DSD and force PCM output
+NO_DSD=
+
+# Decoder backend: native (default) or ffmpeg
+DECODER=
+
+# ── Network Options ───────────────────────────────────────────────────────
+# Force a specific network interface (e.g., eth0, enp3s0)
+INTERFACE=
+
+# Force HTTP server port (leave empty for auto)
+HTTP_PORT=
+
+# ── Logging ───────────────────────────────────────────────────────────────
+# Set to "yes" for verbose debug output
+# Check logs:  sudo journalctl -u slim2upnp -f
+VERBOSE=
