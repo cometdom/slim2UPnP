@@ -639,7 +639,7 @@ echo "════════════════════════�
 echo ""
 echo "  Open the Web Configuration UI in your browser:"
 echo ""
-echo "    ${CYAN:-}http://${LOCAL_IP}:8082${NC:-}"
+echo -e "    ${CYAN:-}http://${LOCAL_IP}:8082${NC:-}"
 echo ""
 echo "  From there you can configure your renderer, LMS server,"
 echo "  and start playing — no command line needed."
