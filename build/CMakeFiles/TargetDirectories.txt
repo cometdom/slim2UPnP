@@ -1,0 +1,7 @@
+/home/dominique/slim2UPnP/build/CMakeFiles/slim2upnp.dir
+/home/dominique/slim2UPnP/build/CMakeFiles/edit_cache.dir
+/home/dominique/slim2UPnP/build/CMakeFiles/rebuild_cache.dir
+/home/dominique/slim2UPnP/build/CMakeFiles/list_install_components.dir
+/home/dominique/slim2UPnP/build/CMakeFiles/install.dir
+/home/dominique/slim2UPnP/build/CMakeFiles/install/local.dir
+/home/dominique/slim2UPnP/build/CMakeFiles/install/strip.dir
