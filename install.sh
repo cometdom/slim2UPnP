@@ -207,13 +207,24 @@ download_binary() {
 
     chmod +x "$tmp_dir/$binary_file"
 
+    # Install runtime dependencies BEFORE verifying (dynamic binaries need .so)
+    install_runtime_deps "$tmp_dir/$binary_file"
+
     # Verify the binary runs
+    step "Verifying binary..."
     if "$tmp_dir/$binary_file" --version >/dev/null 2>&1; then
         info "Binary verified OK"
     else
+        # Show which libraries are missing
         error "Downloaded binary failed to execute"
-        error "This may be an architecture mismatch."
-        error "Build from source instead: sudo ./install.sh --build"
+        if command -v ldd >/dev/null 2>&1; then
+            local missing="$(ldd "$tmp_dir/$binary_file" 2>&1 | grep "not found")"
+            if [ -n "$missing" ]; then
+                error "Missing libraries:"
+                echo "$missing" | while read -r line; do echo "    $line"; done
+            fi
+        fi
+        error "Install missing libraries, or build from source: sudo ./install.sh --build"
         rm -rf "$tmp_dir"
         return 1
     fi
