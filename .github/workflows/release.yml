@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   # ============================================================
-  # x86_64 builds (v2 baseline + v3 AVX2) — Alpine musl static
+  # x86_64 builds (v2 baseline + v3 AVX2)
   # ============================================================
   build-x64:
     runs-on: ubuntu-24.04
@@ -24,53 +24,43 @@ jobs:
         include:
           - variant: x64-v2
             march: v2
-            cflags: "-march=x86-64-v2"
             desc: "x86_64 baseline (any Intel/AMD 64-bit)"
           - variant: x64-v3
             march: v3
-            cflags: "-march=x86-64-v3 -mavx2 -mfma"
             desc: "x86_64 AVX2 (Haswell 2013+)"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build static binary in Alpine container (${{ matrix.variant }})
+      - name: Install dependencies
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/src \
-            -w /src \
-            alpine:3.21 sh -c '
-              apk add --no-cache \
-                build-base cmake \
-                flac-dev \
-                libupnp-dev \
-                mpg123-dev \
-                libvorbis-dev libogg-dev \
-                ffmpeg-dev \
-                linux-headers
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config \
+            libflac-dev \
+            libupnp-dev \
+            libmpg123-dev \
+            libvorbis-dev libogg-dev \
+            libavcodec-dev libavutil-dev
 
-              export CXXFLAGS="${{ matrix.cflags }} -O2"
-              export CFLAGS="${{ matrix.cflags }} -O2"
-
-              cmake -B build \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_EXE_LINKER_FLAGS="-static" \
-                -DCMAKE_FIND_LIBRARY_SUFFIXES=".a" \
-                -DSTATIC_BUILD=ON \
-                -DTARGET_MARCH=${{ matrix.march }} \
-                -DNOLOG=ON
-
-              cmake --build build -j$(nproc)
-              strip build/slim2upnp
-            '
+      - name: Build (${{ matrix.variant }})
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTARGET_MARCH=${{ matrix.march }} \
+            -DNOLOG=ON
+          cmake --build build -j$(nproc)
 
       - name: Verify binary
         run: |
           file build/slim2upnp
+          ldd build/slim2upnp
           build/slim2upnp --version
 
-      - name: Rename binary
-        run: cp build/slim2upnp slim2upnp-${{ matrix.variant }}
+      - name: Strip and rename binary
+        run: |
+          strip build/slim2upnp
+          cp build/slim2upnp slim2upnp-${{ matrix.variant }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -79,7 +69,7 @@ jobs:
           path: slim2upnp-${{ matrix.variant }}
 
   # ============================================================
-  # aarch64 build — Alpine musl static via QEMU
+  # aarch64 build via QEMU
   # ============================================================
   build-aarch64:
     runs-on: ubuntu-24.04
@@ -92,26 +82,22 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build static binary in Alpine ARM64 container
+      - name: Build in ARM64 container
         run: |
           docker run --rm --platform linux/arm64 \
             -v ${{ github.workspace }}:/src \
             -w /src \
-            alpine:3.21 sh -c '
-              apk add --no-cache \
-                build-base cmake \
-                flac-dev \
+            ubuntu:24.04 bash -c '
+              apt-get update && apt-get install -y \
+                build-essential cmake pkg-config \
+                libflac-dev \
                 libupnp-dev \
-                mpg123-dev \
+                libmpg123-dev \
                 libvorbis-dev libogg-dev \
-                ffmpeg-dev \
-                linux-headers
+                libavcodec-dev libavutil-dev
 
               cmake -B build \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_EXE_LINKER_FLAGS="-static" \
-                -DCMAKE_FIND_LIBRARY_SUFFIXES=".a" \
-                -DSTATIC_BUILD=ON \
                 -DNOLOG=ON
 
               cmake --build build -j$(nproc)
@@ -119,7 +105,8 @@ jobs:
             '
 
       - name: Verify binary
-        run: file build/slim2upnp
+        run: |
+          file build/slim2upnp
 
       - name: Rename binary
         run: cp build/slim2upnp slim2upnp-aarch64
@@ -180,8 +167,9 @@ jobs:
             | `slim2upnp-x64-v3` | x86_64 AVX2 | Modern PCs (Haswell 2013+) |
             | `slim2upnp-aarch64` | ARM64 | Raspberry Pi 4/5, ARM servers |
 
-            All binaries are **statically linked** (musl libc) — zero runtime dependencies.
-            Just download, `chmod +x`, and run on any Linux of the matching architecture.
+            Binaries are dynamically linked against standard system libraries
+            (libFLAC, libupnp, etc.). Install the runtime dependencies for your
+            distribution — see the README for details.
 
             ### Quick install
 
@@ -193,15 +181,6 @@ jobs:
 
             The installer auto-detects your architecture, downloads the right binary,
             and sets up the systemd or OpenRC service.
-
-            ### Manual install
-
-            ```bash
-            chmod +x slim2upnp-x64-v2
-            sudo cp slim2upnp-x64-v2 /usr/local/bin/slim2upnp
-            slim2upnp --list-renderers
-            slim2upnp -r "My Renderer" -s <LMS_IP>
-            ```
 
             See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation.
           files: |

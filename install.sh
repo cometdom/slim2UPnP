@@ -270,6 +270,52 @@ build_from_source() {
 # Install
 # ============================================================================
 
+install_runtime_deps() {
+    step "Checking runtime dependencies..."
+
+    # Only install if the binary is dynamically linked
+    if file "$1" 2>/dev/null | grep -q "statically linked"; then
+        info "Static binary — no runtime dependencies needed"
+        return 0
+    fi
+
+    case "$DISTRO_ID" in
+        ubuntu|debian)
+            if ! dpkg -l libflac8 libupnp17 2>/dev/null | grep -q "^ii"; then
+                step "Installing runtime libraries..."
+                apt-get update -qq
+                apt-get install -y -qq libflac8 libupnp17 libmpg123-0 \
+                    libvorbisfile3 libavcodec-extra libavutil58 2>/dev/null || \
+                apt-get install -y -qq libflac12 libupnp17 libmpg123-0 \
+                    libvorbisfile3 libavcodec60 libavutil58 2>/dev/null || \
+                    warn "Some runtime libraries may be missing — install manually if needed"
+            fi
+            ;;
+        fedora)
+            if ! rpm -q flac-libs libupnp 2>/dev/null | grep -q "^flac"; then
+                step "Installing runtime libraries..."
+                dnf install -y -q flac-libs libupnp mpg123-libs \
+                    libvorbis ffmpeg-free-libs 2>/dev/null || \
+                    warn "Some runtime libraries may be missing — install manually if needed"
+            fi
+            ;;
+        arch|manjaro)
+            if ! pacman -Q flac libupnp 2>/dev/null | grep -q "^flac"; then
+                step "Installing runtime libraries..."
+                pacman -S --noconfirm --needed flac libupnp mpg123 libvorbis ffmpeg 2>/dev/null || \
+                    warn "Some runtime libraries may be missing — install manually if needed"
+            fi
+            ;;
+        gentoo|gentooplayer)
+            # Gentoo users typically have these already
+            info "Gentoo: ensure media-libs/flac net-libs/libupnp are installed"
+            ;;
+        *)
+            info "Check that libFLAC, libupnp, libmpg123, libvorbis are installed"
+            ;;
+    esac
+}
+
 install_binary() {
     local src="$1"
 
@@ -277,6 +323,8 @@ install_binary() {
         error "Binary not found: $src"
         exit 1
     fi
+
+    install_runtime_deps "$src"
 
     info "Installing $BINARY_NAME to $INSTALL_DIR/"
     install -m 755 "$src" "$INSTALL_DIR/$BINARY_NAME"

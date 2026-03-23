@@ -132,7 +132,7 @@ sudo cp slim2upnp-x64-v2 /usr/local/bin/slim2upnp
 slim2upnp --list-renderers
 ```
 
-> **Note:** Each binary is compiled for a specific CPU architecture. A binary built on x86_64 will not run on ARM64 and vice versa. Static builds are portable across Linux distributions of the same architecture.
+> **Note:** Each binary is compiled for a specific CPU architecture. A binary built on x86_64 will not run on ARM64 and vice versa. Runtime libraries (libFLAC, libupnp, etc.) must be installed on the target system — the installer handles this automatically.
 
 ### Build from source
 
