@@ -715,8 +715,12 @@ int main(int argc, char* argv[]) {
                                     // Prebuffer done — allow renderer to connect
                                     audioServerPtr->setReadyToServe();
 
+                                    slimproto->updateElapsed(0, 0);
+
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                     upnpPtr->play();
+
+                                    pushedDsdBytes = 0;
 
                                     serverReady = true;
                                     slimproto->sendStat(StatEvent::STMl);
@@ -1036,8 +1040,14 @@ int main(int argc, char* argv[]) {
                                 // Prebuffer done — now allow renderer to connect and read
                                 audioServerPtr->setReadyToServe();
 
+                                // Reset elapsed to 0: prebuffered frames are not playback time
+                                slimproto->updateElapsed(0, 0);
+
                                 upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                 upnpPtr->play();
+
+                                // Count elapsed from now (after Play), not from prebuffer start
+                                pushedFrames = 0;
 
                                 serverReady = true;
                                 slimproto->sendStat(StatEvent::STMl);
