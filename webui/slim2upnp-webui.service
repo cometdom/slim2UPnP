@@ -1,0 +1,17 @@
+[Unit]
+Description=slim2UPnP Web Configuration UI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/slim2upnp-webui/diretta_webui.py --profile /opt/slim2upnp-webui/profiles/slim2upnp.json --port 8082
+WorkingDirectory=/opt/slim2upnp-webui
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=slim2upnp-webui
+
+[Install]
+WantedBy=multi-user.target

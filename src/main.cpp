@@ -33,7 +33,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.0.1"
+#define SLIM2UPNP_VERSION "0.0.2"
 
 // ============================================
 // Globals

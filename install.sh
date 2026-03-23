@@ -380,11 +380,16 @@ install_systemd() {
     systemctl daemon-reload
     info "systemd reloaded"
 
+    # Install WebUI
+    install_webui
+
     echo ""
     info "Next steps:"
-    echo "  1. Edit /etc/default/slim2upnp to set your renderer and LMS"
-    echo "  2. sudo systemctl start slim2upnp"
-    echo "  3. sudo systemctl enable slim2upnp   # auto-start at boot"
+    echo "  1. Open the WebUI: http://$(hostname -I | awk '{print $1}'):8082"
+    echo "     Or edit /etc/default/slim2upnp manually"
+    echo "  2. Set your renderer name and LMS server"
+    echo "  3. sudo systemctl start slim2upnp"
+    echo "  4. sudo systemctl enable slim2upnp   # auto-start at boot"
     echo ""
     echo "  Useful commands:"
     echo "    sudo systemctl status slim2upnp     # check status"
@@ -416,16 +421,63 @@ install_openrc() {
         warn "Config file already exists: /etc/conf.d/slim2upnp (not overwritten)"
     fi
 
+    # Install WebUI
+    install_webui
+
     echo ""
     info "Next steps:"
-    echo "  1. Edit /etc/conf.d/slim2upnp to set your renderer and LMS"
-    echo "  2. sudo rc-service slim2upnp start"
-    echo "  3. sudo rc-update add slim2upnp default   # auto-start at boot"
+    echo "  1. Open the WebUI: http://$(hostname -I | awk '{print $1}'):8082"
+    echo "     Or edit /etc/conf.d/slim2upnp manually"
+    echo "  2. Set your renderer name and LMS server"
+    echo "  3. sudo rc-service slim2upnp start"
+    echo "  4. sudo rc-update add slim2upnp default   # auto-start at boot"
     echo ""
     echo "  Useful commands:"
     echo "    sudo rc-service slim2upnp status     # check status"
     echo "    tail -f /var/log/slim2upnp.log       # follow logs"
     echo "    sudo rc-service slim2upnp restart    # restart after config change"
+}
+
+install_webui() {
+    local webui_src="$SCRIPT_DIR/webui"
+    local webui_dest="/opt/slim2upnp-webui"
+
+    if [ ! -f "$webui_src/diretta_webui.py" ]; then
+        warn "WebUI files not found in $webui_src, skipping"
+        return 1
+    fi
+
+    # Check Python3
+    if ! command -v python3 >/dev/null 2>&1; then
+        warn "Python 3 not found — WebUI requires Python 3"
+        warn "Install it with your package manager, then re-run install.sh"
+        return 1
+    fi
+
+    step "Installing WebUI to $webui_dest..."
+    mkdir -p "$webui_dest"
+    cp "$webui_src/diretta_webui.py" "$webui_dest/"
+    cp "$webui_src/config_parser.py" "$webui_dest/"
+    cp -r "$webui_src/profiles" "$webui_dest/"
+    cp -r "$webui_src/templates" "$webui_dest/"
+    cp -r "$webui_src/static" "$webui_dest/"
+
+    # Install webUI service
+    if [ "$INIT_SYSTEM" = "systemd" ]; then
+        cp "$webui_src/slim2upnp-webui.service" /etc/systemd/system/
+        systemctl daemon-reload
+        systemctl enable slim2upnp-webui 2>/dev/null || true
+        systemctl start slim2upnp-webui 2>/dev/null || true
+        info "WebUI service installed (systemd)"
+    elif [ "$INIT_SYSTEM" = "openrc" ]; then
+        cp "$webui_src/slim2upnp-webui.openrc" /etc/init.d/slim2upnp-webui
+        chmod 755 /etc/init.d/slim2upnp-webui
+        rc-update add slim2upnp-webui default 2>/dev/null || true
+        rc-service slim2upnp-webui start 2>/dev/null || true
+        info "WebUI service installed (OpenRC)"
+    fi
+
+    info "WebUI available at: http://$(hostname -I | awk '{print $1}'):8082"
 }
 
 install_no_service() {
@@ -444,24 +496,31 @@ install_no_service() {
 do_uninstall() {
     info "Uninstalling slim2UPnP..."
 
-    # Stop service if running
+    # Stop services if running
     if [ "$INIT_SYSTEM" = "systemd" ]; then
         systemctl stop slim2upnp 2>/dev/null || true
+        systemctl stop slim2upnp-webui 2>/dev/null || true
         systemctl disable slim2upnp 2>/dev/null || true
+        systemctl disable slim2upnp-webui 2>/dev/null || true
         rm -f /etc/systemd/system/slim2upnp.service
+        rm -f /etc/systemd/system/slim2upnp-webui.service
         systemctl daemon-reload
-        info "systemd service removed"
+        info "systemd services removed"
     elif [ "$INIT_SYSTEM" = "openrc" ]; then
         rc-service slim2upnp stop 2>/dev/null || true
+        rc-service slim2upnp-webui stop 2>/dev/null || true
         rc-update del slim2upnp default 2>/dev/null || true
+        rc-update del slim2upnp-webui default 2>/dev/null || true
         rm -f /etc/init.d/slim2upnp
-        info "OpenRC service removed"
+        rm -f /etc/init.d/slim2upnp-webui
+        info "OpenRC services removed"
     fi
 
-    # Remove binary and wrapper
+    # Remove binary, wrapper, and webUI
     rm -f "$INSTALL_DIR/$BINARY_NAME"
     rm -f "$INSTALL_DIR/start-slim2upnp.sh"
-    info "Binary removed: $INSTALL_DIR/$BINARY_NAME"
+    rm -rf /opt/slim2upnp-webui
+    info "Binary and WebUI removed"
 
     # Keep config files (user may want them)
     if [ -f /etc/default/slim2upnp ]; then

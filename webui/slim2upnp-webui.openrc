@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+description="slim2UPnP Web Configuration UI"
+
+command="/usr/bin/python3"
+command_args="/opt/slim2upnp-webui/diretta_webui.py --profile /opt/slim2upnp-webui/profiles/slim2upnp.json --port 8082"
+command_background=true
+pidfile="/run/slim2upnp-webui.pid"
+
+directory="/opt/slim2upnp-webui"
+
+depend() {
+    need net
+}

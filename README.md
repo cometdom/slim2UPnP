@@ -239,7 +239,25 @@ Run `slim2upnp --list-renderers` to find available renderers on your network.
 sudo ./install.sh --uninstall
 ```
 
-This stops the service, removes the binary and service files. Config files are kept (remove manually if desired).
+This stops the service, removes the binary, WebUI, and service files. Config files are kept (remove manually if desired).
+
+## Web Configuration UI
+
+slim2UPnP includes a web-based configuration interface — no need to edit config files manually.
+
+After installation, open your browser at:
+
+```
+http://<your-machine-ip>:8082
+```
+
+The WebUI lets you:
+- Set the UPnP renderer name or direct URL
+- Configure the LMS server address and player name
+- Toggle DSD, decoder backend, network options
+- Save settings and restart the service with one click
+
+The WebUI is installed automatically by `install.sh` and runs as a separate service (`slim2upnp-webui`). It requires Python 3.
 
 ## DSD Support
 

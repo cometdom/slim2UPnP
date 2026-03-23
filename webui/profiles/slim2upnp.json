@@ -1,0 +1,115 @@
+{
+    "product_name": "slim2UPnP",
+    "service_name": "slim2upnp",
+    "config_path": "/etc/default/slim2upnp",
+    "config_type": "shell_vars",
+    "groups": [
+        {
+            "name": "UPnP Renderer",
+            "collapsed": false,
+            "settings": [
+                {
+                    "key": "RENDERER",
+                    "type": "text",
+                    "label": "Renderer Name",
+                    "description": "Name of your UPnP renderer (substring match, case-insensitive). Run 'slim2upnp --list-renderers' to find available renderers.",
+                    "default": ""
+                },
+                {
+                    "key": "RENDERER_URL",
+                    "type": "text",
+                    "label": "Renderer URL (direct)",
+                    "description": "Direct URL to renderer's description XML (skips SSDP discovery). Use this if the renderer is on a different subnet. Example: http://192.168.1.104:4005/description.xml",
+                    "default": ""
+                }
+            ]
+        },
+        {
+            "name": "LMS Connection",
+            "collapsed": false,
+            "settings": [
+                {
+                    "key": "LMS_SERVER",
+                    "type": "text",
+                    "label": "LMS Server IP",
+                    "description": "IP address of your Logitech Media Server. Leave empty for auto-discovery (works on most networks).",
+                    "default": ""
+                },
+                {
+                    "key": "PLAYER_NAME",
+                    "type": "text",
+                    "label": "Player Name",
+                    "description": "Name shown in the LMS interface. Leave empty for default 'slim2UPnP'.",
+                    "default": ""
+                }
+            ]
+        },
+        {
+            "name": "Audio",
+            "collapsed": true,
+            "settings": [
+                {
+                    "key": "NO_DSD",
+                    "type": "select",
+                    "label": "Disable DSD",
+                    "description": "Force PCM output (no DSD passthrough). Only enable this if your DAC has problems with DSD.",
+                    "default": "",
+                    "options": [
+                        {"value": "", "label": "No (DSD enabled)"},
+                        {"value": "yes", "label": "Yes (force PCM only)"}
+                    ]
+                },
+                {
+                    "key": "DECODER",
+                    "type": "select",
+                    "label": "Decoder Backend",
+                    "description": "Audio decoder engine. 'native' uses libFLAC (recommended). 'ffmpeg' uses FFmpeg (alternative).",
+                    "default": "",
+                    "options": [
+                        {"value": "", "label": "Native (default)"},
+                        {"value": "ffmpeg", "label": "FFmpeg"}
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Network",
+            "collapsed": true,
+            "settings": [
+                {
+                    "key": "INTERFACE",
+                    "type": "text",
+                    "label": "Network Interface",
+                    "description": "Force a specific network interface (e.g., eth0, enp3s0). Leave empty for auto-detect.",
+                    "default": ""
+                },
+                {
+                    "key": "HTTP_PORT",
+                    "type": "number",
+                    "label": "HTTP Server Port",
+                    "description": "Port for the audio HTTP server that serves audio to the renderer. Leave empty (0) for auto-select.",
+                    "default": "",
+                    "min": 0,
+                    "max": 65535
+                }
+            ]
+        },
+        {
+            "name": "Logging",
+            "collapsed": true,
+            "settings": [
+                {
+                    "key": "VERBOSE",
+                    "type": "select",
+                    "label": "Verbose Logging",
+                    "description": "Enable debug logging. Check logs with: journalctl -u slim2upnp -f",
+                    "default": "",
+                    "options": [
+                        {"value": "", "label": "No (normal)"},
+                        {"value": "yes", "label": "Yes (debug output)"}
+                    ]
+                }
+            ]
+        }
+    ]
+}
