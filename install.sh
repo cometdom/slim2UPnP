@@ -629,10 +629,22 @@ case "$INIT_SYSTEM" in
         ;;
 esac
 
+LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+[ -z "$LOCAL_IP" ] && LOCAL_IP="<your-machine-ip>"
+
 echo ""
-info "Installation complete."
+echo "═══════════════════════════════════════════════════════"
+info "Installation complete!"
+echo "═══════════════════════════════════════════════════════"
 echo ""
-echo "  Quick test (before configuring the service):"
-echo "    $INSTALL_DIR/$BINARY_NAME --list-renderers"
-echo "    $INSTALL_DIR/$BINARY_NAME -r \"My Renderer\" -s <LMS_IP>"
+echo "  Open the Web Configuration UI in your browser:"
+echo ""
+echo "    ${CYAN:-}http://${LOCAL_IP}:8082${NC:-}"
+echo ""
+echo "  From there you can configure your renderer, LMS server,"
+echo "  and start playing — no command line needed."
+echo ""
+echo "  Then select 'slim2UPnP' as the player in LMS and press play."
+echo ""
+echo "═══════════════════════════════════════════════════════"
 echo ""

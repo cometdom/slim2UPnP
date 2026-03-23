@@ -4,6 +4,22 @@ Slimproto to UPnP bridge with native DSD support.
 
 slim2UPnP connects a Logitech Media Server (LMS) to any UPnP/DLNA renderer, acting as a virtual player. Unlike squeeze2upnp, it provides full DSD playback (DSF, DFF, DoP) through a single, clean binary with no external dependencies on Squeezelite.
 
+---
+
+## Support This Project
+
+If you find this tool valuable, you can support development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/cometdom)
+
+**Important notes:**
+- Donations are **optional** and appreciated
+- Help cover test equipment and coffee
+- **No guarantees** for features, support, or timelines
+- The project remains free and open source for everyone
+
+---
+
 ## Why slim2UPnP?
 
 | | squeeze2upnp | slim2UPnP |
