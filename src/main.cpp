@@ -458,6 +458,7 @@ int main(int argc, char* argv[]) {
     std::thread audioTestThread;
     std::atomic<bool> audioTestRunning{false};
     std::atomic<bool> audioThreadDone{true};
+    std::atomic<uint32_t> streamGeneration{0};  // Incremented on each strm-s
 
     // Gapless: pending next track
     struct PendingTrack {
@@ -576,9 +577,11 @@ int main(int argc, char* argv[]) {
                 char pcmEndian = cmd.pcmEndian;
                 audioTestRunning.store(true);
                 audioThreadDone.store(false, std::memory_order_release);
+                uint32_t thisGeneration = streamGeneration.fetch_add(1) + 1;
                 audioTestThread = std::thread([&httpStream, &slimproto,
                     &audioTestRunning, &audioThreadDone, &hasPendingTrack,
-                    &pendingMutex, &pendingNextTrack,
+                    &pendingMutex, &pendingNextTrack, &streamGeneration,
+                    thisGeneration,
                     formatCode, pcmRate, pcmSize, pcmChannels, pcmEndian,
                     audioServerPtr, upnpPtr, &config]() {
 
@@ -741,10 +744,14 @@ int main(int argc, char* argv[]) {
 
                                     // Start UPnP playback in background thread
                                     serverReady = true;
-                                    std::thread([upnpPtr, audioServerPtr, &slimproto]() {
+                                    std::thread([upnpPtr, audioServerPtr, &slimproto,
+                                                 &streamGeneration, thisGeneration]() {
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                        upnpPtr->play();
-                                        slimproto->sendStat(StatEvent::STMl);
+                                        // Only send Play+STMl if this stream is still current
+                                        if (streamGeneration.load() == thisGeneration) {
+                                            upnpPtr->play();
+                                            slimproto->sendStat(StatEvent::STMl);
+                                        }
                                     }).detach();
                                 }
                                 continue;
@@ -1069,10 +1076,14 @@ int main(int argc, char* argv[]) {
                                 // Start UPnP playback in background thread
                                 // (SetAVTransportURI blocks for seconds while renderer connects)
                                 serverReady = true;
-                                std::thread([upnpPtr, audioServerPtr, &slimproto]() {
+                                std::thread([upnpPtr, audioServerPtr, &slimproto,
+                                             &streamGeneration, thisGeneration]() {
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                    upnpPtr->play();
-                                    slimproto->sendStat(StatEvent::STMl);
+                                    // Only send Play+STMl if this stream is still current
+                                    if (streamGeneration.load() == thisGeneration) {
+                                        upnpPtr->play();
+                                        slimproto->sendStat(StatEvent::STMl);
+                                    }
                                 }).detach();
                             }
                             continue;
@@ -1242,11 +1253,18 @@ int main(int argc, char* argv[]) {
                     pendingNextTrack.reset();
                     hasPendingTrack.store(false, std::memory_order_release);
                 }
-                audioTestRunning.store(false);
-                httpStream->disconnect();
-                upnpPtr->stop();
-                audioServerPtr->reset();
-                slimproto->sendStat(StatEvent::STMf);
+                {
+                    bool wasActive = !audioThreadDone.load(std::memory_order_acquire);
+                    audioTestRunning.store(false);
+                    httpStream->disconnect();
+                    upnpPtr->stop();
+                    audioServerPtr->reset();
+                    // Only send STMf if something was actually playing
+                    // (avoids confusing LMS during initial registration strm-q)
+                    if (wasActive) {
+                        slimproto->sendStat(StatEvent::STMf);
+                    }
+                }
                 break;
 
             case STRM_PAUSE:
@@ -1268,11 +1286,16 @@ int main(int argc, char* argv[]) {
                     pendingNextTrack.reset();
                     hasPendingTrack.store(false, std::memory_order_release);
                 }
-                audioTestRunning.store(false);
-                httpStream->disconnect();
-                upnpPtr->stop();
-                audioServerPtr->reset();
-                slimproto->sendStat(StatEvent::STMf);
+                {
+                    bool wasActive = !audioThreadDone.load(std::memory_order_acquire);
+                    audioTestRunning.store(false);
+                    httpStream->disconnect();
+                    upnpPtr->stop();
+                    audioServerPtr->reset();
+                    if (wasActive) {
+                        slimproto->sendStat(StatEvent::STMf);
+                    }
+                }
                 break;
 
             default:
