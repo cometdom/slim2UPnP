@@ -621,6 +621,49 @@ int main(int argc, char* argv[]) {
                         constexpr size_t DSD_PLANAR_BUF = 16384;
                         uint8_t planarBuf[DSD_PLANAR_BUF];
 
+                        // DSF block interleave: convert planar [L...][R...] to
+                        // DSF block format [4096 L][4096 R][4096 L][4096 R]...
+                        constexpr size_t DSF_BLOCK_SIZE = 4096;
+                        std::vector<uint8_t> dsfInterleaveBuf;
+
+                        // Convert planar DSD to DSF block-interleaved and write to server
+                        auto writeDsfBlockInterleaved = [&](const uint8_t* planar, size_t totalBytes,
+                                                            uint32_t ch) -> size_t {
+                            if (ch < 2 || totalBytes < 2) {
+                                // Mono: write directly
+                                return audioServerPtr->writeAudio(planar, totalBytes);
+                            }
+                            // Planar layout: [L0..Ln][R0..Rn], each half = totalBytes/2
+                            size_t bytesPerCh = totalBytes / ch;
+                            const uint8_t* left = planar;
+                            const uint8_t* right = planar + bytesPerCh;
+
+                            dsfInterleaveBuf.resize(totalBytes);
+                            size_t outPos = 0;
+                            size_t srcPos = 0;
+
+                            while (srcPos < bytesPerCh) {
+                                size_t blockBytes = std::min(DSF_BLOCK_SIZE, bytesPerCh - srcPos);
+                                // L block
+                                std::memcpy(dsfInterleaveBuf.data() + outPos, left + srcPos, blockBytes);
+                                outPos += blockBytes;
+                                // Pad to DSF_BLOCK_SIZE if needed
+                                if (blockBytes < DSF_BLOCK_SIZE) {
+                                    std::memset(dsfInterleaveBuf.data() + outPos, 0, DSF_BLOCK_SIZE - blockBytes);
+                                    outPos += DSF_BLOCK_SIZE - blockBytes;
+                                }
+                                // R block
+                                std::memcpy(dsfInterleaveBuf.data() + outPos, right + srcPos, blockBytes);
+                                outPos += blockBytes;
+                                if (blockBytes < DSF_BLOCK_SIZE) {
+                                    std::memset(dsfInterleaveBuf.data() + outPos, 0, DSF_BLOCK_SIZE - blockBytes);
+                                    outPos += DSF_BLOCK_SIZE - blockBytes;
+                                }
+                                srcPos += blockBytes;
+                            }
+                            return audioServerPtr->writeAudio(dsfInterleaveBuf.data(), outPos);
+                        };
+
                         constexpr unsigned int PREBUFFER_MS = 500;
                         uint64_t pushedDsdBytes = 0;
                         bool serverReady = false;
@@ -732,7 +775,7 @@ int main(int argc, char* argv[]) {
                                         if (audioServerPtr->getBufferLevel() > 0.90f) break;
                                         size_t bytes = dsdReader->readPlanar(planarBuf, DSD_PLANAR_BUF);
                                         if (bytes == 0) break;
-                                        audioServerPtr->writeAudio(planarBuf, bytes);
+                                        writeDsfBlockInterleaved(planarBuf, bytes, detectedChannels);
                                         pushedDsdBytes += bytes;
                                     }
 
@@ -762,7 +805,7 @@ int main(int argc, char* argv[]) {
                                 if (audioServerPtr->getBufferLevel() <= 0.95f) {
                                     size_t bytes = dsdReader->readPlanar(planarBuf, DSD_PLANAR_BUF);
                                     if (bytes > 0) {
-                                        audioServerPtr->writeAudio(planarBuf, bytes);
+                                        writeDsfBlockInterleaved(planarBuf, bytes, detectedChannels);
                                         pushedDsdBytes += bytes;
                                     }
                                 } else {

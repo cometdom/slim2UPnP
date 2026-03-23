@@ -329,7 +329,11 @@ std::vector<uint8_t> AudioHttpServer::buildDsfHeader() const {
     // Minimal DSF: DSD chunk (28) + fmt chunk (52) + data chunk header (12) = 92 bytes header
     uint32_t channels = m_format.channels;
     uint32_t dsdRate = m_format.dsdRate;
-    uint64_t totalSize = 0;  // Unknown for streaming
+
+    // Use large placeholder sizes for streaming (like WAV uses 0x7FFFFFFF)
+    // FFmpeg's DSF demuxer needs non-zero sizes to work correctly
+    uint64_t dataChunkSize = 0x7FFFFFFFFFFFFFFFULL;  // Max int64 (data chunk header + data)
+    uint64_t totalFileSize = 28 + 52 + dataChunkSize; // DSD + fmt + data chunks
 
     std::vector<uint8_t> hdr(92, 0);
     auto put32 = [&](size_t off, uint32_t v) {
@@ -347,7 +351,7 @@ std::vector<uint8_t> AudioHttpServer::buildDsfHeader() const {
     // DSD chunk (28 bytes)
     hdr[0] = 'D'; hdr[1] = 'S'; hdr[2] = 'D'; hdr[3] = ' ';
     put64(4, 28);               // DSD chunk size
-    put64(12, totalSize);       // Total file size (0 = unknown)
+    put64(12, totalFileSize);   // Total file size
     put64(20, 0);               // Metadata offset (none)
 
     // fmt chunk (52 bytes)
@@ -359,13 +363,13 @@ std::vector<uint8_t> AudioHttpServer::buildDsfHeader() const {
     put32(52, channels);        // Channel count
     put32(56, dsdRate);         // Sample rate (DSD bit rate)
     put32(60, 1);               // Bits per sample (1 for DSD)
-    put64(64, 0);               // Sample count (0 = unknown for streaming)
+    put64(64, 0x7FFFFFFFFFFFFFFFULL);  // Sample count (large value for streaming)
     put32(72, 4096);            // Block size per channel
     put32(76, 0);               // Reserved
 
     // data chunk header (12 bytes)
     hdr[80] = 'd'; hdr[81] = 'a'; hdr[82] = 't'; hdr[83] = 'a';
-    put64(84, 0);               // Data chunk size (0 = unknown for streaming)
+    put64(84, dataChunkSize);   // Data chunk size
 
     return hdr;
 }
