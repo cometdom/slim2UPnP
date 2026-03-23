@@ -73,7 +73,12 @@ public:
     // --- Audio format ---
 
     /// Configure format for next stream. Call before writeAudio().
+    /// This creates the ring buffer but does NOT allow clients to read yet.
     void setFormat(const AudioFormat& format);
+
+    /// Signal that prebuffering is done and clients can start reading.
+    /// Call after filling the ring buffer with initial data.
+    void setReadyToServe();
 
     const AudioFormat& getFormat() const { return m_format; }
 
@@ -139,6 +144,7 @@ private:
     // --- Audio format ---
     AudioFormat m_format;
     std::atomic<bool> m_formatReady{false};
+    std::atomic<bool> m_readyToServe{false};  // Set after prebuffer is done
 
     // --- Server state ---
     int m_listenSocket = -1;

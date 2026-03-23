@@ -712,7 +712,9 @@ int main(int argc, char* argv[]) {
                                         pushedDsdBytes += bytes;
                                     }
 
-                                    // Tell UPnP renderer to play
+                                    // Prebuffer done — allow renderer to connect
+                                    audioServerPtr->setReadyToServe();
+
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                     upnpPtr->play();
 
@@ -1007,10 +1009,10 @@ int main(int argc, char* argv[]) {
                                     }
                                 }
 
-                                // Set format on AudioHttpServer
+                                // Prebuffer into ring buffer FIRST (before making server available)
+                                // This ensures the renderer gets data immediately on connect
                                 audioServerPtr->setFormat(audioFmt);
 
-                                // Flush prebuffer
                                 const int32_t* ptr = decodeCache.data() + decodeCachePos;
                                 size_t remaining = prebufFrames;
                                 size_t actualPushed = 0;
@@ -1031,7 +1033,9 @@ int main(int argc, char* argv[]) {
                                 decodeCachePos += actualPushed * detectedChannels;
                                 pushedFrames += actualPushed;
 
-                                // Tell UPnP renderer to play
+                                // Prebuffer done — now allow renderer to connect and read
+                                audioServerPtr->setReadyToServe();
+
                                 upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                 upnpPtr->play();
 

@@ -181,12 +181,18 @@ void AudioHttpServer::setFormat(const AudioFormat& format) {
     }
 
     m_formatReady.store(true);
+    m_readyToServe.store(false);  // Wait for prebuffer before serving
     m_endOfStream.store(false);
 
     LOG_INFO("[AudioHttpServer] Format: " << format.sampleRate << " Hz, "
              << format.bitDepth << "-bit, " << format.channels << " ch"
              << (format.isDSD ? " (DSD)" : "")
              << " | Buffer: " << (targetSize / 1024) << " KB");
+}
+
+void AudioHttpServer::setReadyToServe() {
+    m_readyToServe.store(true);
+    LOG_DEBUG("[AudioHttpServer] Ready to serve (prebuffer done)");
 }
 
 // ============================================================================
@@ -231,6 +237,7 @@ void AudioHttpServer::reset() {
 
     m_endOfStream.store(true);
     m_formatReady.store(false);
+    m_readyToServe.store(false);
 
     // Disconnect current client to force re-fetch
     {
@@ -447,11 +454,11 @@ void AudioHttpServer::handleClient(int clientSocket) {
 
     LOG_DEBUG("[AudioHttpServer] Received request: " << std::string(reqBuf, std::min(reqLen, (ssize_t)80)));
 
-    // Wait for format to be ready
-    while (!m_formatReady.load() && m_running.load() && !m_endOfStream.load()) {
+    // Wait for prebuffer to be ready (not just format — data must be in the ring buffer)
+    while (!m_readyToServe.load() && m_running.load() && !m_endOfStream.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    if (!m_formatReady.load() || !m_running.load()) return;
+    if (!m_readyToServe.load() || !m_running.load()) return;
 
     // Build HTTP response headers
     std::string mimeType = getMimeType();

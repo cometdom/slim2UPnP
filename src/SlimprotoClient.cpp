@@ -285,11 +285,12 @@ void SlimprotoClient::handleStrm(const uint8_t* data, size_t len) {
             sendStat(StatEvent::STMt, ts);
             // Log heartbeat only once per minute to reduce noise
             {
-                static uint32_t lastLoggedTs = 0;
-                if (ts == 0 || ts >= lastLoggedTs + 60000) {
-                    LOG_DEBUG("[Slimproto] heartbeat (ts="
-                              << ts << ")");
-                    lastLoggedTs = ts;
+                static auto lastLogTime = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastLogTime).count();
+                if (elapsed >= 60) {
+                    LOG_DEBUG("[Slimproto] heartbeat (ts=" << ts << ")");
+                    lastLogTime = now;
                 }
             }
             return;  // Don't invoke stream callback for heartbeats
