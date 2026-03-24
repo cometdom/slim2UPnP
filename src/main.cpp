@@ -475,6 +475,7 @@ int main(int argc, char* argv[]) {
     std::mutex pendingMutex;
     std::shared_ptr<PendingTrack> pendingNextTrack;
     std::atomic<bool> hasPendingTrack{false};
+    std::atomic<bool> resetElapsedPending{false};
 
     // ============================================
     // Stream callback
@@ -519,6 +520,8 @@ int main(int argc, char* argv[]) {
                 // === GAPLESS PATH: audio thread active, queue next track ===
                 if (!audioThreadDone.load(std::memory_order_acquire)) {
                     LOG_INFO("[Gapless] Audio thread active, queuing next track");
+                    resetElapsedPending.store(true, std::memory_order_release);
+                    slimproto->updateElapsed(0, 0);
 
                     auto nextHttp = std::make_shared<HttpStreamClient>();
                     if (!nextHttp->connect(streamIp, streamPort, httpRequest)) {
@@ -585,6 +588,7 @@ int main(int argc, char* argv[]) {
                 uint32_t thisGeneration = streamGeneration.fetch_add(1) + 1;
                 audioTestThread = std::thread([&httpStream, &slimproto,
                     &audioTestRunning, &audioThreadDone, &hasPendingTrack,
+                    &resetElapsedPending,
                     &pendingMutex, &pendingNextTrack, &streamGeneration,
                     thisGeneration,
                     formatCode, pcmRate, pcmSize, pcmChannels, pcmEndian,
@@ -823,6 +827,12 @@ int main(int argc, char* argv[]) {
 
                             // === PHASE 5: Update elapsed (wall clock since Play) ===
                             if (serverReady && dsdPlayStarted.load(std::memory_order_acquire)) {
+                                // Reset clock on gapless transition
+                                if (resetElapsedPending.load(std::memory_order_acquire)) {
+                                    dsdPlayStartTime = std::chrono::steady_clock::now();
+                                    lastElapsedLog = 0;
+                                    resetElapsedPending.store(false, std::memory_order_release);
+                                }
                                 auto now = std::chrono::steady_clock::now();
                                 uint64_t totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                     now - dsdPlayStartTime).count();
@@ -1164,6 +1174,12 @@ int main(int argc, char* argv[]) {
                         // ========== PHASE 5: Update elapsed (wall clock since Play) ==========
                         if (serverReady && playStarted.load(std::memory_order_acquire)) {
                             {
+                                // Reset clock on gapless transition
+                                if (resetElapsedPending.load(std::memory_order_acquire)) {
+                                    playStartTime = std::chrono::steady_clock::now();
+                                    lastElapsedLog = 0;
+                                    resetElapsedPending.store(false, std::memory_order_release);
+                                }
                                 auto now = std::chrono::steady_clock::now();
                                 uint64_t totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                     now - playStartTime).count();
