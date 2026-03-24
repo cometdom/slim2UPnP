@@ -460,6 +460,7 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> audioThreadDone{true};
     std::atomic<uint32_t> streamGeneration{0};  // Incremented on each strm-s
     bool firstStreamAfterConnect = true;  // Suppress Play on initial registration strm-s
+    auto processStartTime = std::chrono::steady_clock::now();
 
     // Gapless: pending next track
     struct PendingTrack {
@@ -1419,13 +1420,11 @@ int main(int argc, char* argv[]) {
             slimproto->run();
         });
 
-        // Only suppress Play on the very first connection (fresh start).
-        // On reconnections, LMS re-sends the current track and we should play it.
-        if (connectionCount == 1) {
-            firstStreamAfterConnect = true;
-        } else {
-            firstStreamAfterConnect = false;
-        }
+        // Suppress Play during the startup dance (first ~10 seconds).
+        // LMS does: connect → strm-q → strm-s → disconnect → reconnect → strm-q → strm-s
+        // All of this happens automatically. We should not Play until stable.
+        auto elapsed = std::chrono::steady_clock::now() - processStartTime;
+        firstStreamAfterConnect = (elapsed < std::chrono::seconds(10));
         if (connectionCount == 1) {
             LOG_INFO("Player registered with LMS");
             std::cout << "(Press Ctrl+C to stop)" << std::endl;
