@@ -459,6 +459,7 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> audioTestRunning{false};
     std::atomic<bool> audioThreadDone{true};
     std::atomic<uint32_t> streamGeneration{0};  // Incremented on each strm-s
+    bool firstStreamAfterConnect = true;  // Suppress Play on initial registration strm-s
 
     // Gapless: pending next track
     struct PendingTrack {
@@ -576,6 +577,8 @@ int main(int argc, char* argv[]) {
                 char pcmChannels = cmd.pcmChannels;
                 char pcmEndian = cmd.pcmEndian;
                 char autostart = cmd.autostart;
+                bool suppressPlay = firstStreamAfterConnect;
+                firstStreamAfterConnect = false;  // Only suppress on the very first stream
                 audioTestRunning.store(true);
                 audioThreadDone.store(false, std::memory_order_release);
                 uint32_t thisGeneration = streamGeneration.fetch_add(1) + 1;
@@ -584,7 +587,7 @@ int main(int argc, char* argv[]) {
                     &pendingMutex, &pendingNextTrack, &streamGeneration,
                     thisGeneration,
                     formatCode, pcmRate, pcmSize, pcmChannels, pcmEndian,
-                    autostart,
+                    autostart, suppressPlay,
                     audioServerPtr, upnpPtr, &config]() {
 
                     bool openFailedInGapless = false;
@@ -789,18 +792,14 @@ int main(int argc, char* argv[]) {
 
                                     // Start UPnP playback in background thread
                                     serverReady = true;
-                                    bool shouldAutoPlay = (autostart != AUTOSTART_NONE);
                                     std::thread([upnpPtr, audioServerPtr, &slimproto,
                                                  &streamGeneration, thisGeneration,
-                                                 shouldAutoPlay]() {
+                                                 suppressPlay]() {
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                        // Only send Play+STMl if this stream is still current
-                                        if (streamGeneration.load() == thisGeneration && shouldAutoPlay) {
-                                            upnpPtr->play();
-                                            slimproto->sendStat(StatEvent::STMl);
-                                        } else if (streamGeneration.load() == thisGeneration) {
-                                            // autostart=0: buffered but not playing, send STMl
-                                            // so LMS knows we're ready (paused state)
+                                        if (streamGeneration.load() == thisGeneration) {
+                                            if (!suppressPlay) {
+                                                upnpPtr->play();
+                                            }
                                             slimproto->sendStat(StatEvent::STMl);
                                         }
                                     }).detach();
@@ -1127,18 +1126,14 @@ int main(int argc, char* argv[]) {
                                 // Start UPnP playback in background thread
                                 // (SetAVTransportURI blocks for seconds while renderer connects)
                                 serverReady = true;
-                                bool shouldAutoPlay = (autostart != AUTOSTART_NONE);
                                 std::thread([upnpPtr, audioServerPtr, &slimproto,
                                              &streamGeneration, thisGeneration,
-                                             shouldAutoPlay]() {
+                                             suppressPlay]() {
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                    // Only send Play+STMl if this stream is still current
-                                    if (streamGeneration.load() == thisGeneration && shouldAutoPlay) {
-                                        upnpPtr->play();
-                                        slimproto->sendStat(StatEvent::STMl);
-                                    } else if (streamGeneration.load() == thisGeneration) {
-                                        // autostart=0: buffered but not playing, send STMl
-                                        // so LMS knows we're ready (paused state)
+                                    if (streamGeneration.load() == thisGeneration) {
+                                        if (!suppressPlay) {
+                                            upnpPtr->play();
+                                        }
                                         slimproto->sendStat(StatEvent::STMl);
                                     }
                                 }).detach();
@@ -1424,6 +1419,7 @@ int main(int argc, char* argv[]) {
             slimproto->run();
         });
 
+        firstStreamAfterConnect = true;  // Suppress Play on next strm-s
         if (connectionCount == 1) {
             LOG_INFO("Player registered with LMS");
             std::cout << "(Press Ctrl+C to stop)" << std::endl;
