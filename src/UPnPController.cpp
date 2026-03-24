@@ -555,6 +555,126 @@ int UPnPController::getPositionSeconds() {
 }
 
 // ============================================================================
+// Position monitoring
+// ============================================================================
+
+/// Parse "H:MM:SS" or "H:MM:SS.xxx" to milliseconds
+static uint32_t parseUpnpTimeMs(const std::string& t) {
+    int h = 0, m = 0, s = 0;
+    float frac = 0.0f;
+    if (sscanf(t.c_str(), "%d:%d:%d.%f", &h, &m, &s, &frac) >= 3 ||
+        sscanf(t.c_str(), "%d:%d:%d", &h, &m, &s) >= 3) {
+        return static_cast<uint32_t>((h * 3600 + m * 60 + s) * 1000 +
+                                     static_cast<int>(frac * 1000));
+    }
+    return 0;
+}
+
+UPnPController::PositionInfo UPnPController::queryPosition() {
+    PositionInfo info;
+
+    // GetTransportInfo
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto* response = sendAction(
+            m_renderer.avTransportControlURL,
+            AVTRANSPORT_TYPE,
+            "GetTransportInfo",
+            {{"InstanceID", "0"}});
+        if (response) {
+            info.transportState = getResponseValue(response, "CurrentTransportState");
+            ixmlDocument_free(response);
+        } else {
+            return info; // valid = false
+        }
+    }
+
+    // GetPositionInfo
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto* response = sendAction(
+            m_renderer.avTransportControlURL,
+            AVTRANSPORT_TYPE,
+            "GetPositionInfo",
+            {{"InstanceID", "0"}});
+        if (response) {
+            std::string relTime = getResponseValue(response, "RelTime");
+            ixmlDocument_free(response);
+            info.relTimeMs = parseUpnpTimeMs(relTime);
+            info.relTimeSec = info.relTimeMs / 1000;
+            info.valid = true;
+        }
+    }
+
+    return info;
+}
+
+void UPnPController::startMonitoring() {
+    if (m_monitorRunning.load()) return;
+    m_monitoredSec.store(0);
+    m_monitoredMs.store(0);
+    m_gaplessOffsetMs.store(0);
+    m_monitorHasData.store(false);
+    m_monitorRunning.store(true);
+    m_monitorThread = std::thread(&UPnPController::monitorLoop, this);
+}
+
+void UPnPController::stopMonitoring() {
+    m_monitorRunning.store(false);
+    if (m_monitorThread.joinable()) {
+        m_monitorThread.join();
+    }
+    m_monitorHasData.store(false);
+    m_monitoredSec.store(0);
+    m_monitoredMs.store(0);
+    m_gaplessOffsetMs.store(0);
+}
+
+void UPnPController::notifyTrackBoundary() {
+    // Capture current raw renderer position as offset for the new track
+    uint32_t rawMs = 0;
+    auto info = queryPosition();
+    if (info.valid) {
+        rawMs = info.relTimeMs;
+    }
+    m_gaplessOffsetMs.store(rawMs);
+    m_monitoredSec.store(0);
+    m_monitoredMs.store(0);
+    LOG_INFO("[UPnP] Track boundary: renderer at " << (rawMs / 1000) << "s, new offset");
+}
+
+std::string UPnPController::getMonitoredTransportState() const {
+    std::lock_guard<std::mutex> lock(m_transportStateMutex);
+    return m_monitoredTransportState;
+}
+
+void UPnPController::monitorLoop() {
+    LOG_DEBUG("[UPnP] Monitor thread started");
+    while (m_monitorRunning.load()) {
+        auto info = queryPosition();
+        if (info.valid &&
+            (info.transportState == "PLAYING" || info.transportState == "PAUSED_PLAYBACK")) {
+            uint32_t offsetMs = m_gaplessOffsetMs.load();
+            uint32_t trackMs = (info.relTimeMs > offsetMs) ? (info.relTimeMs - offsetMs) : 0;
+            m_monitoredSec.store(trackMs / 1000);
+            m_monitoredMs.store(trackMs);
+            m_monitorHasData.store(true);
+
+            {
+                std::lock_guard<std::mutex> lock(m_transportStateMutex);
+                m_monitoredTransportState = info.transportState;
+            }
+        }
+
+        // Sleep 1s in 100ms increments for responsive shutdown
+        for (int i = 0; i < 10 && m_monitorRunning.load(); i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    LOG_DEBUG("[UPnP] Monitor thread stopped");
+}
+
+// ============================================================================
 // SOAP helpers
 // ============================================================================
 

@@ -17,6 +17,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <thread>
 #include <cstdint>
 
 class UPnPController {
@@ -93,6 +94,39 @@ public:
     /// Current position in seconds (-1 on error).
     int getPositionSeconds();
 
+    // --- Position monitoring (dedicated 1Hz polling thread) ---
+
+    struct PositionInfo {
+        bool valid = false;
+        std::string transportState;
+        uint32_t relTimeSec = 0;
+        uint32_t relTimeMs = 0;     // Total milliseconds for precision
+    };
+
+    /// Single combined SOAP query for transport state + position.
+    PositionInfo queryPosition();
+
+    /// Start 1Hz polling thread. Idempotent.
+    void startMonitoring();
+
+    /// Stop polling thread. Blocks until thread exits (~200ms max).
+    void stopMonitoring();
+
+    /// Call at gapless track boundary: captures renderer position as offset.
+    void notifyTrackBoundary();
+
+    /// Track-relative elapsed (seconds). Accounts for gapless offset.
+    uint32_t getMonitoredElapsedSec() const { return m_monitoredSec.load(std::memory_order_relaxed); }
+
+    /// Track-relative elapsed (milliseconds). Accounts for gapless offset.
+    uint32_t getMonitoredElapsedMs() const { return m_monitoredMs.load(std::memory_order_relaxed); }
+
+    /// True if monitoring thread is running and has valid data.
+    bool isMonitoringActive() const { return m_monitorHasData.load(std::memory_order_relaxed); }
+
+    /// Last known transport state from monitoring thread.
+    std::string getMonitoredTransportState() const;
+
     // --- Accessors ---
 
     const RendererInfo& getRenderer() const { return m_renderer; }
@@ -144,6 +178,17 @@ private:
     std::atomic<bool> m_ready{false};
     bool m_initialized = false;
     mutable std::mutex m_mutex;
+
+    // --- Position monitoring thread ---
+    std::thread m_monitorThread;
+    std::atomic<bool> m_monitorRunning{false};
+    std::atomic<bool> m_monitorHasData{false};
+    std::atomic<uint32_t> m_monitoredSec{0};
+    std::atomic<uint32_t> m_monitoredMs{0};
+    std::atomic<uint32_t> m_gaplessOffsetMs{0};
+    mutable std::mutex m_transportStateMutex;
+    std::string m_monitoredTransportState = "UNKNOWN";
+    void monitorLoop();
 
     // --- Discovery synchronization ---
     std::mutex m_discoveryMutex;
