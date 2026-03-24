@@ -1367,6 +1367,7 @@ int main(int argc, char* argv[]) {
             }
         }
         upnpPtr->stop();
+        audioServerPtr->reset();
     };
 
     // Helper: interruptible sleep
