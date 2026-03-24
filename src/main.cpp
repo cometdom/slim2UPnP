@@ -678,6 +678,7 @@ int main(int argc, char* argv[]) {
                         std::atomic<bool> dsdPlayStarted{false};
                         bool dsdStmlSent = false;
                         auto dsdLastRendererPoll = std::chrono::steady_clock::now();
+                        uint32_t dsdRendererOffsetMs = 0;
                         AudioHttpServer::AudioFormat audioFmt{};
                         uint32_t detectedChannels = 2;
                         uint32_t dsdBitRate = 0;
@@ -764,7 +765,12 @@ int main(int argc, char* argv[]) {
                                 if (!dsdFirstTrack &&
                                     audioFmt.dsdRate == prevDsdFmt.dsdRate &&
                                     audioFmt.channels == prevDsdFmt.channels) {
-                                    LOG_INFO("[Gapless] DSD same format, continuing stream");
+                                    {
+                                        auto gapPos = upnpPtr->getPositionInfo();
+                                        if (gapPos.valid) dsdRendererOffsetMs = gapPos.relTimeMs;
+                                    }
+                                    LOG_INFO("[Gapless] DSD same format, continuing stream"
+                                        " rendererOffset=" << dsdRendererOffsetMs / 1000 << "s");
                                     serverReady = true;
                                     slimproto->updateElapsed(0, 0);
                                     lastElapsedLog = 0;
@@ -839,13 +845,17 @@ int main(int argc, char* argv[]) {
                                         }
                                         if (posInfo.transportState == "PLAYING" ||
                                             posInfo.transportState == "PAUSED_PLAYBACK") {
-                                            slimproto->updateElapsed(posInfo.relTimeSec,
-                                                                     posInfo.relTimeMs);
-                                        }
-                                        if (posInfo.relTimeSec >= lastElapsedLog + 10) {
-                                            lastElapsedLog = posInfo.relTimeSec;
-                                            LOG_DEBUG("[Audio] DSD elapsed: " << posInfo.relTimeSec
-                                                      << "s (renderer) state=" << posInfo.transportState);
+                                            uint32_t trackMs = (posInfo.relTimeMs > dsdRendererOffsetMs)
+                                                ? posInfo.relTimeMs - dsdRendererOffsetMs : 0;
+                                            uint32_t trackSec = trackMs / 1000;
+                                            slimproto->updateElapsed(trackSec, trackMs);
+
+                                            if (trackSec >= lastElapsedLog + 10) {
+                                                lastElapsedLog = trackSec;
+                                                LOG_DEBUG("[Audio] DSD elapsed: " << trackSec
+                                                          << "s (track) renderer=" << posInfo.relTimeSec
+                                                          << "s offset=" << dsdRendererOffsetMs / 1000 << "s");
+                                            }
                                         }
                                     }
                                 }
@@ -967,6 +977,7 @@ int main(int argc, char* argv[]) {
                     std::atomic<bool> playStarted{false};
                     bool stmlSent = false;
                     auto lastRendererPoll = std::chrono::steady_clock::now();
+                    uint32_t rendererOffsetMs = 0;  // Subtracted from renderer position at gapless transitions
 
                     bool dopDetected = false;
                     bool httpEof = false;
@@ -1038,9 +1049,12 @@ int main(int argc, char* argv[]) {
                                     (fmt.sampleRate == audioFmt.sampleRate &&
                                      fmt.channels == audioFmt.channels);
                                 if (sameFormat) {
+                                    // Capture renderer position as offset for new track
+                                    auto gapPos = upnpPtr->getPositionInfo();
+                                    if (gapPos.valid) rendererOffsetMs = gapPos.relTimeMs;
                                     LOG_INFO("[Gapless] PCM same format, continuing stream"
-                                        " (cache: " << cacheFrames() << " frames)");
-                                    // STMl for gapless: send immediately, renderer is already playing
+                                        " (cache: " << cacheFrames() << " frames)"
+                                        " rendererOffset=" << rendererOffsetMs / 1000 << "s");
                                     slimproto->updateElapsed(0, 0);
                                     lastElapsedLog = 0;
                                     slimproto->sendStat(StatEvent::STMl);
@@ -1094,7 +1108,12 @@ int main(int argc, char* argv[]) {
                                 audioFmt.sampleRate == prevAudioFmt.sampleRate &&
                                 audioFmt.bitDepth == prevAudioFmt.bitDepth &&
                                 audioFmt.channels == prevAudioFmt.channels) {
-                                LOG_INFO("[Gapless] PCM same format, continuing stream");
+                                {
+                                    auto gapPos = upnpPtr->getPositionInfo();
+                                    if (gapPos.valid) rendererOffsetMs = gapPos.relTimeMs;
+                                }
+                                LOG_INFO("[Gapless] PCM same format, continuing stream"
+                                    " rendererOffset=" << rendererOffsetMs / 1000 << "s");
                                 serverReady = true;
                                 slimproto->updateElapsed(0, 0);
                                 lastElapsedLog = 0;
@@ -1198,17 +1217,22 @@ int main(int argc, char* argv[]) {
                                         stmlSent = true;
                                         LOG_INFO("[Audio] Renderer confirmed PLAYING");
                                     }
-                                    // Update elapsed from renderer's actual position
+                                    // Update elapsed from renderer's actual position,
+                                    // adjusted for gapless offset (renderer counts from stream start)
                                     if (posInfo.transportState == "PLAYING" ||
                                         posInfo.transportState == "PAUSED_PLAYBACK") {
-                                        slimproto->updateElapsed(posInfo.relTimeSec,
-                                                                 posInfo.relTimeMs);
-                                    }
-                                    if (posInfo.relTimeSec >= lastElapsedLog + 10) {
-                                        lastElapsedLog = posInfo.relTimeSec;
-                                        LOG_DEBUG("[Audio] Elapsed: " << posInfo.relTimeSec
-                                                  << "s (renderer) cache=" << cacheFrames() << "f"
-                                                  << " state=" << posInfo.transportState);
+                                        uint32_t trackMs = (posInfo.relTimeMs > rendererOffsetMs)
+                                            ? posInfo.relTimeMs - rendererOffsetMs : 0;
+                                        uint32_t trackSec = trackMs / 1000;
+                                        slimproto->updateElapsed(trackSec, trackMs);
+
+                                        if (trackSec >= lastElapsedLog + 10) {
+                                            lastElapsedLog = trackSec;
+                                            LOG_DEBUG("[Audio] Elapsed: " << trackSec
+                                                      << "s (track) renderer=" << posInfo.relTimeSec
+                                                      << "s offset=" << rendererOffsetMs / 1000
+                                                      << "s cache=" << cacheFrames() << "f");
+                                        }
                                     }
                                 }
                             }
