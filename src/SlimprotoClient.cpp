@@ -597,8 +597,8 @@ std::string SlimprotoClient::buildCapabilities() const {
     // Features — also comma-separated key=value pairs
     // LMS SqueezePlay::updateCapabilities() parses these via split(',')
     caps << ",MaxSampleRate=" << m_config.maxSampleRate;
-    caps << ",Model=slim2diretta";
-    caps << ",ModelName=slim2diretta";
+    caps << ",Model=slim2upnp";
+    caps << ",ModelName=slim2upnp";
     caps << ",AccuratePlayPoints=1";
     caps << ",HasDigitalOut=1";
 
