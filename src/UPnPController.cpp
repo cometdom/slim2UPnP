@@ -37,7 +37,7 @@ bool UPnPController::init(const std::string& networkInterface) {
         return false;
     }
 
-    ret = UpnpRegisterClient(ctrlPointCallback, this, &m_clientHandle);
+    ret = UpnpRegisterClient(reinterpret_cast<Upnp_FunPtr>(ctrlPointCallback), this, &m_clientHandle);
     if (ret != UPNP_E_SUCCESS) {
         LOG_ERROR("[UPnP] UpnpRegisterClient failed: " << UpnpGetErrorMessage(ret));
         UpnpFinish();
@@ -217,9 +217,9 @@ std::vector<UPnPController::RendererInfo> UPnPController::scanRenderers(
 // ============================================================================
 
 int UPnPController::ctrlPointCallback(Upnp_EventType eventType,
-                                       void* event, void* cookie) {
+                                       const void* event, void* cookie) {
     auto* self = static_cast<UPnPController*>(cookie);
-    return self->handleEvent(eventType, static_cast<const void*>(event));
+    return self->handleEvent(eventType, event);
 }
 
 int UPnPController::handleEvent(Upnp_EventType eventType, const void* event) {
