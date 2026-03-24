@@ -787,6 +787,7 @@ int main(int argc, char* argv[]) {
                                         pushedDsdBytes += bytes;
                                     }
 
+                                    audioServerPtr->setReadyToServe();
                                     slimproto->updateElapsed(0, 0);
 
                                     // Start UPnP playback in background thread
@@ -794,14 +795,9 @@ int main(int argc, char* argv[]) {
                                     std::thread([upnpPtr, audioServerPtr, &slimproto,
                                                  &streamGeneration, thisGeneration,
                                                  suppressPlay, &dsdPlayStarted, &dsdPlayStartTime]() {
-                                        if (suppressPlay) {
-                                            audioServerPtr->setReadyToServe();
-                                            return;
-                                        }
+                                        if (suppressPlay) return;
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                         if (streamGeneration.load() != thisGeneration) return;
-                                        // NOW allow renderer to connect and immediately play
-                                        audioServerPtr->setReadyToServe();
                                         upnpPtr->play();
                                         dsdPlayStartTime = std::chrono::steady_clock::now();
                                         dsdPlayStarted.store(true, std::memory_order_release);
@@ -1123,8 +1119,8 @@ int main(int argc, char* argv[]) {
                                 decodeCachePos += actualPushed * detectedChannels;
                                 pushedFrames += actualPushed;
 
-                                // Don't serve yet — wait until Play is about to be sent
-                                // This prevents the renderer from pre-downloading audio
+                                // Allow renderer to connect
+                                audioServerPtr->setReadyToServe();
                                 slimproto->updateElapsed(0, 0);
 
                                 // Start UPnP playback in background thread
@@ -1132,15 +1128,9 @@ int main(int argc, char* argv[]) {
                                 std::thread([upnpPtr, audioServerPtr, &slimproto,
                                              &streamGeneration, thisGeneration,
                                              suppressPlay, &playStarted, &playStartTime]() {
-                                    if (suppressPlay) {
-                                        audioServerPtr->setReadyToServe();
-                                        return;
-                                    }
-                                    // Set URI first (renderer learns the URL)
+                                    if (suppressPlay) return;
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                     if (streamGeneration.load() != thisGeneration) return;
-                                    // NOW allow renderer to connect and immediately play
-                                    audioServerPtr->setReadyToServe();
                                     upnpPtr->play();
                                     playStartTime = std::chrono::steady_clock::now();
                                     playStarted.store(true, std::memory_order_release);
