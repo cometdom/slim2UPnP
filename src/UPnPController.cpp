@@ -37,7 +37,7 @@ bool UPnPController::init(const std::string& networkInterface) {
         return false;
     }
 
-    ret = UpnpRegisterClient(reinterpret_cast<Upnp_FunPtr>(ctrlPointCallback), this, &m_clientHandle);
+    ret = UpnpRegisterClient(ctrlPointCallback, this, &m_clientHandle);
     if (ret != UPNP_E_SUCCESS) {
         LOG_ERROR("[UPnP] UpnpRegisterClient failed: " << UpnpGetErrorMessage(ret));
         UpnpFinish();
@@ -515,64 +515,6 @@ bool UPnPController::supportsDSD() const {
 // Transport state
 // ============================================================================
 
-// Helper: parse UPnP time "H:MM:SS" or "H:MM:SS.xxx" → total milliseconds
-static uint32_t parseUpnpTime(const std::string& timeStr, uint32_t* outSec = nullptr) {
-    int h = 0, m = 0, s = 0, ms = 0;
-    // Try "H:MM:SS.xxx" first
-    if (sscanf(timeStr.c_str(), "%d:%d:%d.%d", &h, &m, &s, &ms) < 3) {
-        if (outSec) *outSec = 0;
-        return 0;
-    }
-    // Normalize fractional part: "1" → 100ms, "12" → 120ms, "123" → 123ms
-    if (ms > 0 && ms < 10) ms *= 100;
-    else if (ms >= 10 && ms < 100) ms *= 10;
-    uint32_t totalSec = h * 3600 + m * 60 + s;
-    if (outSec) *outSec = totalSec;
-    return totalSec * 1000 + ms;
-}
-
-UPnPController::PositionInfo UPnPController::getPositionInfo() {
-    PositionInfo info;
-
-    // --- GetTransportInfo (transport state) ---
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        auto* response = sendAction(
-            m_renderer.avTransportControlURL,
-            AVTRANSPORT_TYPE,
-            "GetTransportInfo",
-            {{"InstanceID", "0"}});
-        if (response) {
-            info.transportState = getResponseValue(response, "CurrentTransportState");
-            ixmlDocument_free(response);
-        } else {
-            info.transportState = "UNKNOWN";
-            return info;  // If transport info fails, don't bother with position
-        }
-    }
-
-    // --- GetPositionInfo (position + duration) ---
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        auto* response = sendAction(
-            m_renderer.avTransportControlURL,
-            AVTRANSPORT_TYPE,
-            "GetPositionInfo",
-            {{"InstanceID", "0"}});
-        if (response) {
-            std::string relTime = getResponseValue(response, "RelTime");
-            std::string duration = getResponseValue(response, "TrackDuration");
-            ixmlDocument_free(response);
-
-            info.relTimeMs = parseUpnpTime(relTime, &info.relTimeSec);
-            info.durationMs = parseUpnpTime(duration, &info.durationSec);
-            info.valid = true;
-        }
-    }
-
-    return info;
-}
-
 std::string UPnPController::getTransportState() {
     std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -591,8 +533,25 @@ std::string UPnPController::getTransportState() {
 }
 
 int UPnPController::getPositionSeconds() {
-    auto info = getPositionInfo();
-    return info.valid ? static_cast<int>(info.relTimeSec) : -1;
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto* response = sendAction(
+        m_renderer.avTransportControlURL,
+        AVTRANSPORT_TYPE,
+        "GetPositionInfo",
+        {{"InstanceID", "0"}});
+
+    if (response) {
+        std::string relTime = getResponseValue(response, "RelTime");
+        ixmlDocument_free(response);
+
+        // Parse "H:MM:SS" or "H:MM:SS.xxx"
+        int h = 0, m = 0, s = 0;
+        if (sscanf(relTime.c_str(), "%d:%d:%d", &h, &m, &s) >= 3) {
+            return h * 3600 + m * 60 + s;
+        }
+    }
+    return -1;
 }
 
 // ============================================================================
