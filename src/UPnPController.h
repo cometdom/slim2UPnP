@@ -87,6 +87,20 @@ public:
 
     // --- Transport state ---
 
+    /// Full position + state info from renderer (single SOAP call pair)
+    struct PositionInfo {
+        bool valid = false;             // true if SOAP succeeded
+        std::string transportState;     // "PLAYING", "STOPPED", "PAUSED_PLAYBACK", etc.
+        uint32_t relTimeSec = 0;        // Current position: seconds
+        uint32_t relTimeMs = 0;         // Current position: total milliseconds
+        uint32_t durationSec = 0;       // Track duration: seconds
+        uint32_t durationMs = 0;        // Track duration: total milliseconds
+    };
+
+    /// Query renderer position + transport state in two SOAP calls.
+    /// This is the main polling method — call every ~1s from a monitoring thread.
+    PositionInfo getPositionInfo();
+
     /// Returns "STOPPED", "PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING", etc.
     std::string getTransportState();
 

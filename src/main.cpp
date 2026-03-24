@@ -475,7 +475,7 @@ int main(int argc, char* argv[]) {
     std::mutex pendingMutex;
     std::shared_ptr<PendingTrack> pendingNextTrack;
     std::atomic<bool> hasPendingTrack{false};
-    std::atomic<bool> resetElapsedPending{false};
+
 
     // ============================================
     // Stream callback
@@ -520,7 +520,6 @@ int main(int argc, char* argv[]) {
                 // === GAPLESS PATH: audio thread active, queue next track ===
                 if (!audioThreadDone.load(std::memory_order_acquire)) {
                     LOG_INFO("[Gapless] Audio thread active, queuing next track");
-                    resetElapsedPending.store(true, std::memory_order_release);
                     slimproto->updateElapsed(0, 0);
 
                     auto nextHttp = std::make_shared<HttpStreamClient>();
@@ -588,7 +587,6 @@ int main(int argc, char* argv[]) {
                 uint32_t thisGeneration = streamGeneration.fetch_add(1) + 1;
                 audioTestThread = std::thread([&httpStream, &slimproto,
                     &audioTestRunning, &audioThreadDone, &hasPendingTrack,
-                    &resetElapsedPending,
                     &pendingMutex, &pendingNextTrack, &streamGeneration,
                     thisGeneration,
                     formatCode, pcmRate, pcmSize, pcmChannels, pcmEndian,
@@ -678,7 +676,8 @@ int main(int argc, char* argv[]) {
                         uint64_t pushedDsdBytes = 0;
                         bool serverReady = false;
                         std::atomic<bool> dsdPlayStarted{false};
-                        std::chrono::steady_clock::time_point dsdPlayStartTime;
+                        bool dsdStmlSent = false;
+                        auto dsdLastRendererPoll = std::chrono::steady_clock::now();
                         AudioHttpServer::AudioFormat audioFmt{};
                         uint32_t detectedChannels = 2;
                         uint32_t dsdBitRate = 0;
@@ -767,7 +766,8 @@ int main(int argc, char* argv[]) {
                                     audioFmt.channels == prevDsdFmt.channels) {
                                     LOG_INFO("[Gapless] DSD same format, continuing stream");
                                     serverReady = true;
-                                    dsdPlayStartTime = std::chrono::steady_clock::now();
+                                    slimproto->updateElapsed(0, 0);
+                                    lastElapsedLog = 0;
                                     slimproto->sendStat(StatEvent::STMl);
                                     continue;
                                 }
@@ -799,14 +799,12 @@ int main(int argc, char* argv[]) {
                                     serverReady = true;
                                     std::thread([upnpPtr, audioServerPtr, &slimproto,
                                                  &streamGeneration, thisGeneration,
-                                                 suppressPlay, &dsdPlayStarted, &dsdPlayStartTime]() {
+                                                 suppressPlay, &dsdPlayStarted]() {
                                         if (suppressPlay) return;
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                         if (streamGeneration.load() != thisGeneration) return;
                                         upnpPtr->play();
-                                        dsdPlayStartTime = std::chrono::steady_clock::now();
                                         dsdPlayStarted.store(true, std::memory_order_release);
-                                        slimproto->sendStat(StatEvent::STMl);
                                     }).detach();
                                 }
                                 continue;
@@ -825,23 +823,31 @@ int main(int argc, char* argv[]) {
                                 }
                             }
 
-                            // === PHASE 5: Update elapsed (wall clock since Play) ===
+                            // === PHASE 5: Poll renderer position ===
                             if (serverReady && dsdPlayStarted.load(std::memory_order_acquire)) {
-                                // Reset clock on gapless transition
-                                if (resetElapsedPending.load(std::memory_order_acquire)) {
-                                    dsdPlayStartTime = std::chrono::steady_clock::now();
-                                    lastElapsedLog = 0;
-                                    resetElapsedPending.store(false, std::memory_order_release);
-                                }
                                 auto now = std::chrono::steady_clock::now();
-                                uint64_t totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    now - dsdPlayStartTime).count();
-                                uint32_t elapsedSec = static_cast<uint32_t>(totalMs / 1000);
-                                slimproto->updateElapsed(elapsedSec, static_cast<uint32_t>(totalMs));
-
-                                if (elapsedSec >= lastElapsedLog + 10) {
-                                    lastElapsedLog = elapsedSec;
-                                    LOG_DEBUG("[Audio] DSD elapsed: " << elapsedSec << "s");
+                                auto msSinceLastPoll = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    now - dsdLastRendererPoll).count();
+                                if (msSinceLastPoll >= 1000) {
+                                    dsdLastRendererPoll = now;
+                                    auto posInfo = upnpPtr->getPositionInfo();
+                                    if (posInfo.valid) {
+                                        if (!dsdStmlSent && posInfo.transportState == "PLAYING") {
+                                            slimproto->sendStat(StatEvent::STMl);
+                                            dsdStmlSent = true;
+                                            LOG_INFO("[Audio] DSD renderer confirmed PLAYING");
+                                        }
+                                        if (posInfo.transportState == "PLAYING" ||
+                                            posInfo.transportState == "PAUSED_PLAYBACK") {
+                                            slimproto->updateElapsed(posInfo.relTimeSec,
+                                                                     posInfo.relTimeMs);
+                                        }
+                                        if (posInfo.relTimeSec >= lastElapsedLog + 10) {
+                                            lastElapsedLog = posInfo.relTimeSec;
+                                            LOG_DEBUG("[Audio] DSD elapsed: " << posInfo.relTimeSec
+                                                      << "s (renderer) state=" << posInfo.transportState);
+                                        }
+                                    }
                                 }
                             }
 
@@ -959,7 +965,8 @@ int main(int argc, char* argv[]) {
                     unsigned int prebufferMs = PREBUFFER_MS_NORMAL;
                     uint64_t pushedFrames = 0;
                     std::atomic<bool> playStarted{false};
-                    std::chrono::steady_clock::time_point playStartTime;
+                    bool stmlSent = false;
+                    auto lastRendererPoll = std::chrono::steady_clock::now();
 
                     bool dopDetected = false;
                     bool httpEof = false;
@@ -1033,7 +1040,9 @@ int main(int argc, char* argv[]) {
                                 if (sameFormat) {
                                     LOG_INFO("[Gapless] PCM same format, continuing stream"
                                         " (cache: " << cacheFrames() << " frames)");
-                                    playStartTime = std::chrono::steady_clock::now();
+                                    // STMl for gapless: send immediately, renderer is already playing
+                                    slimproto->updateElapsed(0, 0);
+                                    lastElapsedLog = 0;
                                     slimproto->sendStat(StatEvent::STMl);
                                 } else {
                                     // Format change — drain old cache, then reopen
@@ -1087,7 +1096,8 @@ int main(int argc, char* argv[]) {
                                 audioFmt.channels == prevAudioFmt.channels) {
                                 LOG_INFO("[Gapless] PCM same format, continuing stream");
                                 serverReady = true;
-                                playStartTime = std::chrono::steady_clock::now();
+                                slimproto->updateElapsed(0, 0);
+                                lastElapsedLog = 0;
                                 slimproto->sendStat(StatEvent::STMl);
                                 continue;
                             }
@@ -1142,14 +1152,14 @@ int main(int argc, char* argv[]) {
                                 serverReady = true;
                                 std::thread([upnpPtr, audioServerPtr, &slimproto,
                                              &streamGeneration, thisGeneration,
-                                             suppressPlay, &playStarted, &playStartTime]() {
+                                             suppressPlay, &playStarted]() {
                                     if (suppressPlay) return;
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                     if (streamGeneration.load() != thisGeneration) return;
                                     upnpPtr->play();
-                                    playStartTime = std::chrono::steady_clock::now();
+                                    // Don't send STMl here — PHASE 5 will send it
+                                    // when the renderer confirms PLAYING state
                                     playStarted.store(true, std::memory_order_release);
-                                    slimproto->sendStat(StatEvent::STMl);
                                 }).detach();
                             }
                             continue;
@@ -1173,27 +1183,35 @@ int main(int argc, char* argv[]) {
                             }
                         }
 
-                        // ========== PHASE 5: Update elapsed (wall clock since Play) ==========
+                        // ========== PHASE 5: Poll renderer position ==========
                         if (serverReady && playStarted.load(std::memory_order_acquire)) {
-                            {
-                                // Reset clock on gapless transition
-                                if (resetElapsedPending.load(std::memory_order_acquire)) {
-                                    playStartTime = std::chrono::steady_clock::now();
-                                    lastElapsedLog = 0;
-                                    resetElapsedPending.store(false, std::memory_order_release);
+                            auto now = std::chrono::steady_clock::now();
+                            auto msSinceLastPoll = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now - lastRendererPoll).count();
+                            if (msSinceLastPoll >= 1000) {
+                                lastRendererPoll = now;
+                                auto posInfo = upnpPtr->getPositionInfo();
+                                if (posInfo.valid) {
+                                    // Send STMl on first PLAYING confirmation
+                                    if (!stmlSent && posInfo.transportState == "PLAYING") {
+                                        slimproto->sendStat(StatEvent::STMl);
+                                        stmlSent = true;
+                                        LOG_INFO("[Audio] Renderer confirmed PLAYING");
+                                    }
+                                    // Update elapsed from renderer's actual position
+                                    if (posInfo.transportState == "PLAYING" ||
+                                        posInfo.transportState == "PAUSED_PLAYBACK") {
+                                        slimproto->updateElapsed(posInfo.relTimeSec,
+                                                                 posInfo.relTimeMs);
+                                    }
+                                    if (posInfo.relTimeSec >= lastElapsedLog + 10) {
+                                        lastElapsedLog = posInfo.relTimeSec;
+                                        LOG_DEBUG("[Audio] Elapsed: " << posInfo.relTimeSec
+                                                  << "s (renderer) cache=" << cacheFrames() << "f"
+                                                  << " state=" << posInfo.transportState);
+                                    }
                                 }
-                                auto now = std::chrono::steady_clock::now();
-                                uint64_t totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    now - playStartTime).count();
-                                uint32_t elapsedSec = static_cast<uint32_t>(totalMs / 1000);
-                                slimproto->updateElapsed(elapsedSec, static_cast<uint32_t>(totalMs));
-
-                                if (elapsedSec >= lastElapsedLog + 10) {
-                                    lastElapsedLog = elapsedSec;
-                                    LOG_DEBUG("[Audio] Elapsed: " << elapsedSec << "s"
-                                              << " cache=" << cacheFrames() << "f");
-                                }
-                            }  // inner scope
+                            }
                         }
 
                         // ========== PHASE 6: Compact cache ==========
@@ -1245,16 +1263,6 @@ int main(int argc, char* argv[]) {
                             }
                             decodeCachePos += samples;
                             pushedFrames += push;
-
-                            if (decoder->isFormatReady()) {
-                                auto fmt = decoder->getFormat();
-                                if (fmt.sampleRate > 0) {
-                                    uint64_t totalMs = pushedFrames * 1000 / fmt.sampleRate;
-                                    slimproto->updateElapsed(
-                                        static_cast<uint32_t>(totalMs / 1000),
-                                        static_cast<uint32_t>(totalMs));
-                                }
-                            }
                         }
 
                         // Wait for gapless next track
