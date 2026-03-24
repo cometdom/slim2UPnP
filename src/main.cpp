@@ -1300,13 +1300,15 @@ int main(int argc, char* argv[]) {
                     bool wasActive = !audioThreadDone.load(std::memory_order_acquire);
                     audioTestRunning.store(false);
                     httpStream->disconnect();
-                    upnpPtr->stop();
-                    audioServerPtr->reset();
-                    // Only send STMf if something was actually playing
-                    // (avoids confusing LMS during initial registration strm-q)
+                    // Only do UPnP stop/reset if something was actually playing
+                    // (avoids SOAP timeout on uninitialized transport at startup)
                     if (wasActive) {
-                        slimproto->sendStat(StatEvent::STMf);
+                        upnpPtr->stop();
+                        audioServerPtr->reset();
                     }
+                    // Always send STMf — prevents LMS from auto-resuming playback
+                    // on reconnection (same behavior as slim2diretta)
+                    slimproto->sendStat(StatEvent::STMf);
                 }
                 break;
 
