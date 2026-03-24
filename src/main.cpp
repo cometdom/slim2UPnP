@@ -763,6 +763,7 @@ int main(int argc, char* argv[]) {
                                     audioFmt.channels == prevDsdFmt.channels) {
                                     LOG_INFO("[Gapless] DSD same format, continuing stream");
                                     serverReady = true;
+                                    dsdPlayStartTime = std::chrono::steady_clock::now();
                                     slimproto->sendStat(StatEvent::STMl);
                                     continue;
                                 }
@@ -1020,6 +1021,7 @@ int main(int argc, char* argv[]) {
                                 if (sameFormat) {
                                     LOG_INFO("[Gapless] PCM same format, continuing stream"
                                         " (cache: " << cacheFrames() << " frames)");
+                                    playStartTime = std::chrono::steady_clock::now();
                                     slimproto->sendStat(StatEvent::STMl);
                                 } else {
                                     // Format change — drain old cache, then reopen
@@ -1073,6 +1075,7 @@ int main(int argc, char* argv[]) {
                                 audioFmt.channels == prevAudioFmt.channels) {
                                 LOG_INFO("[Gapless] PCM same format, continuing stream");
                                 serverReady = true;
+                                playStartTime = std::chrono::steady_clock::now();
                                 slimproto->sendStat(StatEvent::STMl);
                                 continue;
                             }
