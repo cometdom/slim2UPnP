@@ -1096,9 +1096,11 @@ int main(int argc, char* argv[]) {
                                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
                                     }
                                     LOG_INFO("[Gapless] Ring buffer drained, switching format");
-                                    // Signal end of old stream, renderer will reconnect
+                                    // Signal end of old stream
                                     audioServerPtr->signalEndOfStream();
                                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                                    // Format change requires full Stop so renderer accepts new URI
+                                    upnpPtr->stop();
                                     audioServerPtr->reset();
                                     serverReady = false;
                                 }
