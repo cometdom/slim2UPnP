@@ -793,11 +793,14 @@ int main(int argc, char* argv[]) {
                                     // Start UPnP playback in background thread
                                     serverReady = true;
                                     std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                                 &streamGeneration, thisGeneration]() {
+                                                 &streamGeneration, thisGeneration,
+                                                 &gaplessBytesOffset]() {
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                         // Only send Play+STMl if this stream is still current
                                         if (streamGeneration.load() == thisGeneration) {
                                             upnpPtr->play();
+                                            gaplessBytesOffset = audioServerPtr->getBytesServed();
+                                            slimproto->updateElapsed(0, 0);
                                             slimproto->sendStat(StatEvent::STMl);
                                         }
                                     }).detach();
@@ -1135,11 +1138,16 @@ int main(int argc, char* argv[]) {
                                 // (SetAVTransportURI blocks for seconds while renderer connects)
                                 serverReady = true;
                                 std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                             &streamGeneration, thisGeneration]() {
+                                             &streamGeneration, thisGeneration,
+                                             &gaplessBytesOffset]() {
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                     // Only send Play+STMl if this stream is still current
                                     if (streamGeneration.load() == thisGeneration) {
                                         upnpPtr->play();
+                                        // Capture bytes already served as baseline
+                                        // (prebuffer data served before Play)
+                                        gaplessBytesOffset = audioServerPtr->getBytesServed();
+                                        slimproto->updateElapsed(0, 0);
                                         slimproto->sendStat(StatEvent::STMl);
                                     }
                                 }).detach();
