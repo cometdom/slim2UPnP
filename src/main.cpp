@@ -708,25 +708,23 @@ int main(int argc, char* argv[]) {
                             }
 
                             // === GAPLESS: send STMd when renderer approaches end of track ===
+                            // Use RAW bytes served vs total data bytes (no offset adjustment)
                             if (httpEof && playStarted.load(std::memory_order_acquire) && !stmdSent) {
-                                // Get current elapsed from bytes served
-                                uint64_t served = audioServerPtr->getBytesServed();
-                                if (served > gaplessBytesOffset) served -= gaplessBytesOffset;
-                                else served = 0;
-                                uint32_t elapsedSec = (byteRateTotal > 0)
-                                    ? static_cast<uint32_t>(served / byteRateTotal) : 0;
+                                uint64_t rawServed = audioServerPtr->getBytesServed();
+                                uint64_t totalDataBytes = totalBytes;  // Total DSD bytes from HTTP
+                                uint64_t threshold = byteRateTotal * 3;  // 3s of audio
 
-                                // Estimate track duration from total DSD data
-                                uint32_t trackDurationSec = (byteRateTotal > 0)
-                                    ? static_cast<uint32_t>(totalBytes / byteRateTotal) : 0;
-
-                                constexpr uint32_t STMD_LEAD_TIME = 3;
-                                if (trackDurationSec == 0 || elapsedSec + STMD_LEAD_TIME >= trackDurationSec) {
+                                if (totalDataBytes == 0 ||
+                                    rawServed + threshold >= totalDataBytes) {
                                     stmdSent = true;
                                     gaplessWaitStart = std::chrono::steady_clock::now();
+                                    uint32_t servedSec = (byteRateTotal > 0)
+                                        ? static_cast<uint32_t>(rawServed / byteRateTotal) : 0;
+                                    uint32_t trackSec = (byteRateTotal > 0)
+                                        ? static_cast<uint32_t>(totalDataBytes / byteRateTotal) : 0;
                                     LOG_INFO("[Audio] DSD stream complete: " << totalBytes
-                                             << " bytes [STMd at elapsed " << elapsedSec << "s"
-                                             << " / " << trackDurationSec << "s]");
+                                             << " bytes [STMd at served " << servedSec << "s"
+                                             << " / " << trackSec << "s]");
                                     slimproto->sendStat(StatEvent::STMd);
                                 }
                             }
@@ -1004,31 +1002,29 @@ int main(int argc, char* argv[]) {
                         }
 
                         // === GAPLESS: send STMd when renderer approaches end of track ===
-                        // Delay STMd until elapsed is near track duration.
-                        // Sending immediately at httpEof causes LMS to switch
-                        // tracks ~10s early (decode cache + ring buffer latency).
+                        // Use RAW bytes served (not offset-adjusted) vs total decoded bytes.
+                        // The offset is only for elapsed display, not for STMd timing.
                         if (httpEof && playStarted.load(std::memory_order_acquire) && !stmdSent) {
-                            // Calculate track duration from decoded samples
                             uint64_t decoded = decoder->getDecodedSamples();
-                            uint32_t trackDurationSec = (audioFmt.sampleRate > 0)
-                                ? static_cast<uint32_t>(decoded / audioFmt.sampleRate) : 0;
+                            size_t bytesPerFrame = audioFmt.channels * (audioFmt.bitDepth / 8);
+                            uint64_t totalDecodedBytes = decoded * bytesPerFrame;
+                            uint64_t rawServed = audioServerPtr->getBytesServed();
 
-                            // Get current elapsed from bytes served
-                            size_t bytesPerSec = audioFmt.sampleRate * audioFmt.channels * (audioFmt.bitDepth / 8);
-                            uint64_t served = audioServerPtr->getBytesServed();
-                            if (served > gaplessBytesOffset) served -= gaplessBytesOffset;
-                            else served = 0;
-                            uint32_t elapsedSec = (bytesPerSec > 0)
-                                ? static_cast<uint32_t>(served / bytesPerSec) : 0;
-
-                            // Send STMd when within 10s of track end (gives LMS time to prepare)
-                            constexpr uint32_t STMD_LEAD_TIME = 3;
-                            if (trackDurationSec == 0 || elapsedSec + STMD_LEAD_TIME >= trackDurationSec) {
+                            // Send STMd when renderer has consumed most of the decoded data
+                            // (within ~3s worth of audio remaining)
+                            size_t bytesPerSec = audioFmt.sampleRate * bytesPerFrame;
+                            uint64_t threshold = static_cast<uint64_t>(bytesPerSec) * 3;
+                            if (totalDecodedBytes == 0 ||
+                                rawServed + threshold >= totalDecodedBytes) {
                                 stmdSent = true;
+                                uint32_t trackSec = (audioFmt.sampleRate > 0)
+                                    ? static_cast<uint32_t>(decoded / audioFmt.sampleRate) : 0;
+                                uint32_t servedSec = (bytesPerSec > 0)
+                                    ? static_cast<uint32_t>(rawServed / bytesPerSec) : 0;
                                 LOG_INFO("[Audio] Stream complete: " << totalBytes
                                          << " bytes, " << decoded
-                                         << " frames (" << trackDurationSec << "s)"
-                                         << " [STMd at elapsed " << elapsedSec << "s]");
+                                         << " frames (" << trackSec << "s)"
+                                         << " [STMd at served " << servedSec << "s]");
                                 slimproto->sendStat(StatEvent::STMd);
                             }
                         }
