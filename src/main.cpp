@@ -964,6 +964,8 @@ int main(int argc, char* argv[]) {
                     bool httpEof = false;
                     bool stmdSent = false;
                     uint64_t totalDecodedBytes = 0;  // Total audio bytes (for STMd timing)
+                    uint64_t bytesServedBaseline = 0; // Bytes served at Play time
+                    std::atomic<bool> playStarted{false}; // Set when Play confirmed
 
                     while (audioTestRunning.load(std::memory_order_acquire) &&
                            (!httpEof || cacheFrames() > 0 || !stmdSent)) {
@@ -1133,6 +1135,11 @@ int main(int argc, char* argv[]) {
 
                                 // Reset elapsed for new track
                                 pushedFrames = 0;
+                                playStarted.store(false, std::memory_order_release);
+                                bytesServedBaseline = 0;
+                                totalDecodedBytes = 0;
+                                stmdSent = false;
+                                lastElapsedLog = 0;
                                 slimproto->updateElapsed(0, 0);
                                 slimproto->updateStreamBytes(0);
 
@@ -1140,10 +1147,14 @@ int main(int argc, char* argv[]) {
                                     // First track: SetAVTransportURI + Play
                                     serverReady = true;
                                     std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                                 &streamGeneration, thisGeneration]() {
+                                                 &streamGeneration, thisGeneration,
+                                                 &bytesServedBaseline, &playStarted]() {
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                         if (streamGeneration.load() == thisGeneration) {
                                             upnpPtr->play();
+                                            // Capture baseline: bytes already served during prebuffer
+                                            bytesServedBaseline = audioServerPtr->getBytesServed();
+                                            playStarted.store(true, std::memory_order_release);
                                             slimproto->sendStat(StatEvent::STMl);
                                         }
                                     }).detach();
@@ -1159,8 +1170,10 @@ int main(int argc, char* argv[]) {
                                     // Signal end of old stream — renderer will transition
                                     servers[oldSlot]->signalEndOfStream();
 
-                                    // Switch active slot
+                                    // Switch active slot + capture baseline
                                     currentSlot.store(newSlot);
+                                    bytesServedBaseline = audioServerPtr->getBytesServed();
+                                    playStarted.store(true, std::memory_order_release);
                                     serverReady = true;
                                     slimproto->sendStat(StatEvent::STMl);
                                     LOG_INFO("[Gapless] Active slot now " << newSlot);
@@ -1187,14 +1200,16 @@ int main(int argc, char* argv[]) {
                             }
                         }
 
-                        // ========== PHASE 5: Update elapsed (bytes-served) ==========
-                        if (serverReady) {
+                        // ========== PHASE 5: Update elapsed (bytes-served minus baseline) ==========
+                        if (serverReady && playStarted.load(std::memory_order_acquire)) {
                             uint64_t bps = audioFmt.bytesPerSecond();
                             if (bps > 0) {
                                 uint64_t served = audioServerPtr->getBytesServed();
-                                uint32_t elapsedSec = static_cast<uint32_t>(served / bps);
+                                uint64_t playedBytes = (served > bytesServedBaseline)
+                                    ? served - bytesServedBaseline : 0;
+                                uint32_t elapsedSec = static_cast<uint32_t>(playedBytes / bps);
                                 uint32_t elapsedMs = static_cast<uint32_t>(
-                                    served * 1000 / bps);
+                                    playedBytes * 1000 / bps);
                                 slimproto->updateElapsed(elapsedSec, elapsedMs);
 
                                 if (elapsedSec >= lastElapsedLog + 10) {
@@ -1254,13 +1269,15 @@ int main(int argc, char* argv[]) {
                             }
                             decodeCachePos += samples;
 
-                            // Update elapsed from bytes served
+                            // Update elapsed from bytes served (minus baseline)
                             uint64_t bps = audioFmt.bytesPerSecond();
                             if (bps > 0) {
                                 uint64_t served = audioServerPtr->getBytesServed();
+                                uint64_t playedBytes = (served > bytesServedBaseline)
+                                    ? served - bytesServedBaseline : 0;
                                 slimproto->updateElapsed(
-                                    static_cast<uint32_t>(served / bps),
-                                    static_cast<uint32_t>(served * 1000 / bps));
+                                    static_cast<uint32_t>(playedBytes / bps),
+                                    static_cast<uint32_t>(playedBytes * 1000 / bps));
                             }
                         }
 
