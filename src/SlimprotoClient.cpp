@@ -429,9 +429,10 @@ void SlimprotoClient::sendStat(const char eventCode[4], uint32_t serverTimestamp
     stat.streamBufSize = htonl(m_streamBufSize.load(std::memory_order_relaxed));
     stat.streamBufFull = htonl(m_streamBufFull.load(std::memory_order_relaxed));
 
-    uint64_t bytes = m_bytesReceived.load(std::memory_order_relaxed);
-    stat.bytesRecvHi = htonl(static_cast<uint32_t>(bytes >> 32));
-    stat.bytesRecvLo = htonl(static_cast<uint32_t>(bytes & 0xFFFFFFFF));
+    // Don't report real bytesReceived — we download much faster than real-time
+    // which confuses LMS position tracking. Send 0 so LMS uses elapsed instead.
+    stat.bytesRecvHi = 0;
+    stat.bytesRecvLo = 0;
 
     stat.signalStrength = htons(0xFFFF);  // Wired connection
     stat.jiffies = htonl(getJiffies());
