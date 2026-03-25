@@ -706,13 +706,28 @@ int main(int argc, char* argv[]) {
                                 }
                             }
 
-                            // === GAPLESS: send STMd early ===
-                            if (httpEof && serverReady && !stmdSent) {
-                                stmdSent = true;
-                                gaplessWaitStart = std::chrono::steady_clock::now();
-                                LOG_INFO("[Audio] DSD stream complete: " << totalBytes
-                                         << " bytes, " << pushedDsdBytes << " DSD bytes pushed");
-                                slimproto->sendStat(StatEvent::STMd);
+                            // === GAPLESS: send STMd when renderer approaches end of track ===
+                            if (httpEof && playStarted.load(std::memory_order_acquire) && !stmdSent) {
+                                // Get current elapsed from bytes served
+                                uint64_t served = audioServerPtr->getBytesServed();
+                                if (served > gaplessBytesOffset) served -= gaplessBytesOffset;
+                                else served = 0;
+                                uint32_t elapsedSec = (byteRateTotal > 0)
+                                    ? static_cast<uint32_t>(served / byteRateTotal) : 0;
+
+                                // Estimate track duration from total DSD data
+                                uint32_t trackDurationSec = (byteRateTotal > 0)
+                                    ? static_cast<uint32_t>(totalBytes / byteRateTotal) : 0;
+
+                                constexpr uint32_t STMD_LEAD_TIME = 10;
+                                if (trackDurationSec == 0 || elapsedSec + STMD_LEAD_TIME >= trackDurationSec) {
+                                    stmdSent = true;
+                                    gaplessWaitStart = std::chrono::steady_clock::now();
+                                    LOG_INFO("[Audio] DSD stream complete: " << totalBytes
+                                             << " bytes [STMd at elapsed " << elapsedSec << "s"
+                                             << " / " << trackDurationSec << "s]");
+                                    slimproto->sendStat(StatEvent::STMd);
+                                }
                             }
 
                             // === GAPLESS: wait for next track ===
@@ -987,19 +1002,34 @@ int main(int argc, char* argv[]) {
                             }
                         }
 
-                        // === GAPLESS: send STMd early ===
-                        if (httpEof && serverReady && !stmdSent) {
-                            stmdSent = true;
-                            if (decoder->isFormatReady()) {
-                                auto fmt = decoder->getFormat();
-                                uint64_t decoded = decoder->getDecodedSamples();
-                                uint32_t elapsedSec = fmt.sampleRate > 0
-                                    ? static_cast<uint32_t>(decoded / fmt.sampleRate) : 0;
+                        // === GAPLESS: send STMd when renderer approaches end of track ===
+                        // Delay STMd until elapsed is near track duration.
+                        // Sending immediately at httpEof causes LMS to switch
+                        // tracks ~10s early (decode cache + ring buffer latency).
+                        if (httpEof && playStarted.load(std::memory_order_acquire) && !stmdSent) {
+                            // Calculate track duration from decoded samples
+                            uint64_t decoded = decoder->getDecodedSamples();
+                            uint32_t trackDurationSec = (audioFmt.sampleRate > 0)
+                                ? static_cast<uint32_t>(decoded / audioFmt.sampleRate) : 0;
+
+                            // Get current elapsed from bytes served
+                            size_t bytesPerSec = audioFmt.sampleRate * audioFmt.channels * (audioFmt.bitDepth / 8);
+                            uint64_t served = audioServerPtr->getBytesServed();
+                            if (served > gaplessBytesOffset) served -= gaplessBytesOffset;
+                            else served = 0;
+                            uint32_t elapsedSec = (bytesPerSec > 0)
+                                ? static_cast<uint32_t>(served / bytesPerSec) : 0;
+
+                            // Send STMd when within 10s of track end (gives LMS time to prepare)
+                            constexpr uint32_t STMD_LEAD_TIME = 10;
+                            if (trackDurationSec == 0 || elapsedSec + STMD_LEAD_TIME >= trackDurationSec) {
+                                stmdSent = true;
                                 LOG_INFO("[Audio] Stream complete: " << totalBytes
                                          << " bytes, " << decoded
-                                         << " frames (" << elapsedSec << "s)");
+                                         << " frames (" << trackDurationSec << "s)"
+                                         << " [STMd at elapsed " << elapsedSec << "s]");
+                                slimproto->sendStat(StatEvent::STMd);
                             }
-                            slimproto->sendStat(StatEvent::STMd);
                         }
 
                         // ========== PHASE 1b: Drain decoder into cache ==========
