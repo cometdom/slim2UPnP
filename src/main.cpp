@@ -693,7 +693,13 @@ int main(int argc, char* argv[]) {
                                     if (n > 0) {
                                         gotData = true;
                                         totalBytes += n;
-                                        slimproto->updateStreamBytes(totalBytes);
+                                        // Report bytes served (real-time) instead of downloaded (fast)
+                                        {
+                                            uint64_t served = audioServerPtr->getBytesServed();
+                                            if (served > gaplessBytesOffset) served -= gaplessBytesOffset;
+                                            else served = 0;
+                                            slimproto->updateStreamBytes(served);
+                                        }
                                         dsdReader->feed(httpBuf, static_cast<size_t>(n));
                                     } else if (n < 0 || !httpStream->isConnected()) {
                                         httpEof = true;
@@ -971,7 +977,13 @@ int main(int argc, char* argv[]) {
                                 if (n > 0) {
                                     gotData = true;
                                     totalBytes += n;
-                                    slimproto->updateStreamBytes(totalBytes);
+                                    // Report bytes served (real-time) instead of downloaded (fast)
+                                    {
+                                        uint64_t served = audioServerPtr->getBytesServed();
+                                        if (served > gaplessBytesOffset) served -= gaplessBytesOffset;
+                                        else served = 0;
+                                        slimproto->updateStreamBytes(served);
+                                    }
                                     decoder->feed(httpBuf, static_cast<size_t>(n));
                                 } else if (n < 0 || !httpStream->isConnected()) {
                                     httpEof = true;
