@@ -719,7 +719,7 @@ int main(int argc, char* argv[]) {
                                 uint32_t trackDurationSec = (byteRateTotal > 0)
                                     ? static_cast<uint32_t>(totalBytes / byteRateTotal) : 0;
 
-                                constexpr uint32_t STMD_LEAD_TIME = 10;
+                                constexpr uint32_t STMD_LEAD_TIME = 3;
                                 if (trackDurationSec == 0 || elapsedSec + STMD_LEAD_TIME >= trackDurationSec) {
                                     stmdSent = true;
                                     gaplessWaitStart = std::chrono::steady_clock::now();
@@ -1021,7 +1021,7 @@ int main(int argc, char* argv[]) {
                                 ? static_cast<uint32_t>(served / bytesPerSec) : 0;
 
                             // Send STMd when within 10s of track end (gives LMS time to prepare)
-                            constexpr uint32_t STMD_LEAD_TIME = 10;
+                            constexpr uint32_t STMD_LEAD_TIME = 3;
                             if (trackDurationSec == 0 || elapsedSec + STMD_LEAD_TIME >= trackDurationSec) {
                                 stmdSent = true;
                                 LOG_INFO("[Audio] Stream complete: " << totalBytes
@@ -1083,10 +1083,25 @@ int main(int argc, char* argv[]) {
                                         }
                                         decodeCachePos += push * detectedChannels;
                                     }
+                                    // Wait for ring buffer to drain (renderer reads at 1x speed)
+                                    // so the last seconds of audio are not lost
+                                    LOG_INFO("[Gapless] Waiting for ring buffer to drain before format change...");
+                                    auto drainStart = std::chrono::steady_clock::now();
+                                    constexpr int DRAIN_TIMEOUT_MS = 15000;  // Max 15s wait
+                                    while (audioServerPtr->getBufferLevel() > 0.05f &&
+                                           audioTestRunning.load(std::memory_order_acquire)) {
+                                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now() - drainStart).count();
+                                        if (elapsed >= DRAIN_TIMEOUT_MS) {
+                                            LOG_WARN("[Gapless] Drain timeout, proceeding with format change");
+                                            break;
+                                        }
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                                    }
+                                    LOG_INFO("[Gapless] Ring buffer drained, switching format");
                                     // Signal end of old stream, renderer will reconnect
                                     audioServerPtr->signalEndOfStream();
-                                    upnpPtr->stop();
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
                                     audioServerPtr->reset();
                                     serverReady = false;
                                 }
