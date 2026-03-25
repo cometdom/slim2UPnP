@@ -1103,6 +1103,9 @@ int main(int argc, char* argv[]) {
                                     upnpPtr->stop();
                                     audioServerPtr->reset();
                                     serverReady = false;
+                                    playStarted.store(false, std::memory_order_release);
+                                    gaplessBytesOffset = 0;
+                                    lastElapsedLog = 0;
                                 }
                             }
 
