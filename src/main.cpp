@@ -543,9 +543,9 @@ int main(int argc, char* argv[]) {
                 }
 
                 // === COLD START PATH ===
-                // Note: do NOT send UPnP Stop here — SetAVTransportURI
-                // replaces the current stream without forcing the renderer
-                // to tear down its output connection (avoids ~8s glitch).
+
+                // Stop UPnP renderer if playing
+                upnpPtr->stop();
 
                 // Join any previous audio thread
                 if (audioTestThread.joinable()) {
@@ -617,8 +617,6 @@ int main(int argc, char* argv[]) {
                         uint64_t totalBytes = 0;
                         bool formatLogged = false;
                         uint64_t lastElapsedLog = 0;
-                        uint64_t gaplessBytesOffset = 0;
-                        std::atomic<bool> playStarted{false};
 
                         constexpr size_t DSD_PLANAR_BUF = 16384;
                         uint8_t planarBuf[DSD_PLANAR_BUF];
@@ -666,7 +664,7 @@ int main(int argc, char* argv[]) {
                             return audioServerPtr->writeAudio(dsfInterleaveBuf.data(), outPos);
                         };
 
-                        constexpr unsigned int PREBUFFER_MS = 3000;
+                        constexpr unsigned int PREBUFFER_MS = 500;
                         uint64_t pushedDsdBytes = 0;
                         bool serverReady = false;
                         AudioHttpServer::AudioFormat audioFmt{};
@@ -683,7 +681,6 @@ int main(int argc, char* argv[]) {
                         while (audioTestRunning.load(std::memory_order_acquire) &&
                                (!httpEof || dsdReader->availableBytes() > 0 ||
                                 !dsdReader->isFinished() ||
-                                !stmdSent ||
                                 (stmdSent && !gaplessWaitDone))) {
 
                             // === PHASE 1: HTTP read + feed ===
@@ -707,26 +704,13 @@ int main(int argc, char* argv[]) {
                                 }
                             }
 
-                            // === GAPLESS: send STMd when renderer approaches end of track ===
-                            // Use RAW bytes served vs total data bytes (no offset adjustment)
-                            if (httpEof && playStarted.load(std::memory_order_acquire) && !stmdSent) {
-                                uint64_t rawServed = audioServerPtr->getBytesServed();
-                                uint64_t totalDataBytes = totalBytes;  // Total DSD bytes from HTTP
-                                uint64_t threshold = byteRateTotal * 3;  // 3s of audio
-
-                                if (totalDataBytes == 0 ||
-                                    rawServed + threshold >= totalDataBytes) {
-                                    stmdSent = true;
-                                    gaplessWaitStart = std::chrono::steady_clock::now();
-                                    uint32_t servedSec = (byteRateTotal > 0)
-                                        ? static_cast<uint32_t>(rawServed / byteRateTotal) : 0;
-                                    uint32_t trackSec = (byteRateTotal > 0)
-                                        ? static_cast<uint32_t>(totalDataBytes / byteRateTotal) : 0;
-                                    LOG_INFO("[Audio] DSD stream complete: " << totalBytes
-                                             << " bytes [STMd at served " << servedSec << "s"
-                                             << " / " << trackSec << "s]");
-                                    slimproto->sendStat(StatEvent::STMd);
-                                }
+                            // === GAPLESS: send STMd early ===
+                            if (httpEof && serverReady && !stmdSent) {
+                                stmdSent = true;
+                                gaplessWaitStart = std::chrono::steady_clock::now();
+                                LOG_INFO("[Audio] DSD stream complete: " << totalBytes
+                                         << " bytes, " << pushedDsdBytes << " DSD bytes pushed");
+                                slimproto->sendStat(StatEvent::STMd);
                             }
 
                             // === GAPLESS: wait for next track ===
@@ -769,12 +753,8 @@ int main(int argc, char* argv[]) {
                                 if (!dsdFirstTrack &&
                                     audioFmt.dsdRate == prevDsdFmt.dsdRate &&
                                     audioFmt.channels == prevDsdFmt.channels) {
-                                    gaplessBytesOffset = audioServerPtr->getBytesServed();
-                                    LOG_INFO("[Gapless] DSD same format, continuing stream"
-                                        " (bytesOffset: " << gaplessBytesOffset << ")");
+                                    LOG_INFO("[Gapless] DSD same format, continuing stream");
                                     serverReady = true;
-                                    slimproto->updateElapsed(0, 0);
-                                    lastElapsedLog = 0;
                                     slimproto->sendStat(StatEvent::STMl);
                                     continue;
                                 }
@@ -808,16 +788,11 @@ int main(int argc, char* argv[]) {
                                     // Start UPnP playback in background thread
                                     serverReady = true;
                                     std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                                 &streamGeneration, thisGeneration,
-                                                 &gaplessBytesOffset, &playStarted]() {
+                                                 &streamGeneration, thisGeneration]() {
                                         upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                         // Only send Play+STMl if this stream is still current
                                         if (streamGeneration.load() == thisGeneration) {
                                             upnpPtr->play();
-                                            gaplessBytesOffset = audioServerPtr->getBytesServed();
-                                            slimproto->updateElapsed(0, 0);
-                                            slimproto->updateStreamBytes(0);
-                                            playStarted.store(true, std::memory_order_release);
                                             slimproto->sendStat(StatEvent::STMl);
                                         }
                                     }).detach();
@@ -838,14 +813,9 @@ int main(int argc, char* argv[]) {
                                 }
                             }
 
-                            // === PHASE 5: Update elapsed (based on bytes served to renderer) ===
-                            if (playStarted.load(std::memory_order_acquire) && byteRateTotal > 0) {
-                                uint64_t served = audioServerPtr->getBytesServed();
-                                if (served > gaplessBytesOffset)
-                                    served -= gaplessBytesOffset;
-                                else
-                                    served = 0;
-                                uint64_t totalMs = (served * 1000) / byteRateTotal;
+                            // === PHASE 5: Update elapsed ===
+                            if (serverReady && byteRateTotal > 0) {
+                                uint64_t totalMs = (pushedDsdBytes * 1000) / byteRateTotal;
                                 uint32_t elapsedSec = static_cast<uint32_t>(totalMs / 1000);
                                 uint32_t elapsedMs = static_cast<uint32_t>(totalMs);
                                 slimproto->updateElapsed(elapsedSec, elapsedMs);
@@ -965,19 +935,17 @@ int main(int argc, char* argv[]) {
                     bool formatLogged = false;
                     uint64_t lastElapsedLog = 0;
 
-                    constexpr unsigned int PREBUFFER_MS_NORMAL = 3000;
+                    constexpr unsigned int PREBUFFER_MS_NORMAL = 500;
                     constexpr unsigned int PREBUFFER_MS_HIGHRATE = 3000;
                     unsigned int prebufferMs = PREBUFFER_MS_NORMAL;
                     uint64_t pushedFrames = 0;
-                    uint64_t gaplessBytesOffset = 0;  // bytesServed at gapless transition
-                    std::atomic<bool> playStarted{false};  // Set after Play + offset capture
 
                     bool dopDetected = false;
                     bool httpEof = false;
                     bool stmdSent = false;
 
                     while (audioTestRunning.load(std::memory_order_acquire) &&
-                           (!httpEof || cacheFrames() > 0 || !stmdSent)) {
+                           (!httpEof || cacheFrames() > 0)) {
 
                         // ========== PHASE 1a: HTTP read ==========
                         bool gotData = false;
@@ -1001,32 +969,19 @@ int main(int argc, char* argv[]) {
                             }
                         }
 
-                        // === GAPLESS: send STMd when renderer approaches end of track ===
-                        // Use RAW bytes served (not offset-adjusted) vs total decoded bytes.
-                        // The offset is only for elapsed display, not for STMd timing.
-                        if (httpEof && playStarted.load(std::memory_order_acquire) && !stmdSent) {
-                            uint64_t decoded = decoder->getDecodedSamples();
-                            size_t bytesPerFrame = audioFmt.channels * (audioFmt.bitDepth / 8);
-                            uint64_t totalDecodedBytes = decoded * bytesPerFrame;
-                            uint64_t rawServed = audioServerPtr->getBytesServed();
-
-                            // Send STMd when renderer has consumed most of the decoded data
-                            // (within ~3s worth of audio remaining)
-                            size_t bytesPerSec = audioFmt.sampleRate * bytesPerFrame;
-                            uint64_t threshold = static_cast<uint64_t>(bytesPerSec) * 3;
-                            if (totalDecodedBytes == 0 ||
-                                rawServed + threshold >= totalDecodedBytes) {
-                                stmdSent = true;
-                                uint32_t trackSec = (audioFmt.sampleRate > 0)
-                                    ? static_cast<uint32_t>(decoded / audioFmt.sampleRate) : 0;
-                                uint32_t servedSec = (bytesPerSec > 0)
-                                    ? static_cast<uint32_t>(rawServed / bytesPerSec) : 0;
+                        // === GAPLESS: send STMd early ===
+                        if (httpEof && serverReady && !stmdSent) {
+                            stmdSent = true;
+                            if (decoder->isFormatReady()) {
+                                auto fmt = decoder->getFormat();
+                                uint64_t decoded = decoder->getDecodedSamples();
+                                uint32_t elapsedSec = fmt.sampleRate > 0
+                                    ? static_cast<uint32_t>(decoded / fmt.sampleRate) : 0;
                                 LOG_INFO("[Audio] Stream complete: " << totalBytes
                                          << " bytes, " << decoded
-                                         << " frames (" << trackSec << "s)"
-                                         << " [STMd at served " << servedSec << "s]");
-                                slimproto->sendStat(StatEvent::STMd);
+                                         << " frames (" << elapsedSec << "s)");
                             }
+                            slimproto->sendStat(StatEvent::STMd);
                         }
 
                         // ========== PHASE 1b: Drain decoder into cache ==========
@@ -1053,12 +1008,8 @@ int main(int argc, char* argv[]) {
                                     (fmt.sampleRate == audioFmt.sampleRate &&
                                      fmt.channels == audioFmt.channels);
                                 if (sameFormat) {
-                                    gaplessBytesOffset = audioServerPtr->getBytesServed();
                                     LOG_INFO("[Gapless] PCM same format, continuing stream"
-                                        " (cache: " << cacheFrames() << " frames,"
-                                        " bytesOffset: " << gaplessBytesOffset << ")");
-                                    slimproto->updateElapsed(0, 0);
-                                    lastElapsedLog = 0;
+                                        " (cache: " << cacheFrames() << " frames)");
                                     slimproto->sendStat(StatEvent::STMl);
                                 } else {
                                     // Format change — drain old cache, then reopen
@@ -1080,27 +1031,10 @@ int main(int argc, char* argv[]) {
                                         }
                                         decodeCachePos += push * detectedChannels;
                                     }
-                                    // Wait for ring buffer to drain (renderer reads at 1x speed)
-                                    // so the last seconds of audio are not lost
-                                    LOG_INFO("[Gapless] Waiting for ring buffer to drain before format change...");
-                                    auto drainStart = std::chrono::steady_clock::now();
-                                    constexpr int DRAIN_TIMEOUT_MS = 15000;  // Max 15s wait
-                                    while (audioServerPtr->getBufferLevel() > 0.05f &&
-                                           audioTestRunning.load(std::memory_order_acquire)) {
-                                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            std::chrono::steady_clock::now() - drainStart).count();
-                                        if (elapsed >= DRAIN_TIMEOUT_MS) {
-                                            LOG_WARN("[Gapless] Drain timeout, proceeding with format change");
-                                            break;
-                                        }
-                                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                                    }
-                                    LOG_INFO("[Gapless] Ring buffer drained, switching format");
-                                    // Signal end of old stream
+                                    // Signal end of old stream, renderer will reconnect
                                     audioServerPtr->signalEndOfStream();
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                                    // Format change requires full Stop so renderer accepts new URI
                                     upnpPtr->stop();
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
                                     audioServerPtr->reset();
                                     serverReady = false;
                                 }
@@ -1186,18 +1120,11 @@ int main(int argc, char* argv[]) {
                                 // (SetAVTransportURI blocks for seconds while renderer connects)
                                 serverReady = true;
                                 std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                             &streamGeneration, thisGeneration,
-                                             &gaplessBytesOffset, &playStarted]() {
+                                             &streamGeneration, thisGeneration]() {
                                     upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
                                     // Only send Play+STMl if this stream is still current
                                     if (streamGeneration.load() == thisGeneration) {
                                         upnpPtr->play();
-                                        // Capture bytes already served as baseline
-                                        // (prebuffer data served before Play)
-                                        gaplessBytesOffset = audioServerPtr->getBytesServed();
-                                        slimproto->updateElapsed(0, 0);
-                                        slimproto->updateStreamBytes(0);
-                                        playStarted.store(true, std::memory_order_release);
                                         slimproto->sendStat(StatEvent::STMl);
                                     }
                                 }).detach();
@@ -1223,24 +1150,18 @@ int main(int argc, char* argv[]) {
                             }
                         }
 
-                        // ========== PHASE 5: Update elapsed (based on bytes served to renderer) ==========
-                        if (playStarted.load(std::memory_order_acquire) && audioFmt.sampleRate > 0) {
-                            size_t bytesPerSec = audioFmt.sampleRate * audioFmt.channels * (audioFmt.bitDepth / 8);
-                            if (bytesPerSec > 0) {
-                                uint64_t served = audioServerPtr->getBytesServed();
-                                // Subtract gapless offset to get per-track elapsed
-                                if (served > gaplessBytesOffset)
-                                    served -= gaplessBytesOffset;
-                                else
-                                    served = 0;
-                                uint64_t totalMs = (served * 1000) / bytesPerSec;
+                        // ========== PHASE 5: Update elapsed ==========
+                        if (serverReady && decoder->isFormatReady()) {
+                            auto fmt = decoder->getFormat();
+                            if (fmt.sampleRate > 0) {
+                                uint64_t totalMs = pushedFrames * 1000 / fmt.sampleRate;
                                 uint32_t elapsedSec = static_cast<uint32_t>(totalMs / 1000);
                                 uint32_t elapsedMs = static_cast<uint32_t>(totalMs);
                                 slimproto->updateElapsed(elapsedSec, elapsedMs);
 
                                 if (elapsedSec >= lastElapsedLog + 10) {
                                     lastElapsedLog = elapsedSec;
-                                    LOG_DEBUG("[Audio] Elapsed: " << elapsedSec << "s (served)"
+                                    LOG_DEBUG("[Audio] Elapsed: " << elapsedSec << "s"
                                               << " cache=" << cacheFrames() << "f");
                                 }
                             }
@@ -1254,10 +1175,8 @@ int main(int argc, char* argv[]) {
                         }
 
                         // ========== PHASE 7: Anti-busy-loop ==========
-                        if (!gotData && cacheFrames() == 0) {
-                            // Sleep when waiting for data OR waiting for STMd to fire
-                            std::this_thread::sleep_for(std::chrono::milliseconds(
-                                (httpEof && !stmdSent) ? 100 : 1));
+                        if (!gotData && cacheFrames() == 0 && !httpEof) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         }
 
                         if (decoder->hasError()) {
@@ -1383,6 +1302,8 @@ int main(int argc, char* argv[]) {
                     httpStream->disconnect();
                     upnpPtr->stop();
                     audioServerPtr->reset();
+                    // Only send STMf if something was actually playing
+                    // (avoids confusing LMS during initial registration strm-q)
                     if (wasActive) {
                         slimproto->sendStat(StatEvent::STMf);
                     }
