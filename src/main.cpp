@@ -1106,6 +1106,11 @@ int main(int argc, char* argv[]) {
                                     playStarted.store(false, std::memory_order_release);
                                     gaplessBytesOffset = 0;
                                     lastElapsedLog = 0;
+                                    totalBytes = 0;
+                                    stmdSent = false;
+                                    httpEof = false;
+                                    slimproto->updateStreamBytes(0);
+                                    slimproto->updateElapsed(0, 0);
                                 }
                             }
 
