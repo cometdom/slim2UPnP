@@ -684,7 +684,7 @@ int main(int argc, char* argv[]) {
                             return audioServerPtr->writeAudio(dsfInterleaveBuf.data(), outPos);
                         };
 
-                        constexpr unsigned int PREBUFFER_MS = 500;
+                        constexpr unsigned int PREBUFFER_MS = 3000;
                         uint64_t pushedDsdBytes = 0;
                         bool serverReady = false;
                         AudioHttpServer::AudioFormat audioFmt{};
@@ -955,7 +955,7 @@ int main(int argc, char* argv[]) {
                     bool formatLogged = false;
                     uint64_t lastElapsedLog = 0;
 
-                    constexpr unsigned int PREBUFFER_MS_NORMAL = 500;
+                    constexpr unsigned int PREBUFFER_MS_NORMAL = 3000;
                     constexpr unsigned int PREBUFFER_MS_HIGHRATE = 3000;
                     unsigned int prebufferMs = PREBUFFER_MS_NORMAL;
                     uint64_t pushedFrames = 0;

@@ -142,8 +142,8 @@ private:
 
     static constexpr size_t MIN_BUFFER_SIZE = 64 * 1024;       // 64 KB
     static constexpr size_t MAX_BUFFER_SIZE = 32 * 1024 * 1024; // 32 MB
-    static constexpr double PCM_BUFFER_SECONDS = 2.0;
-    static constexpr double DSD_BUFFER_SECONDS = 1.0;
+    static constexpr double PCM_BUFFER_SECONDS = 4.0;
+    static constexpr double DSD_BUFFER_SECONDS = 2.0;
 
     // --- Audio format ---
     AudioFormat m_format;
