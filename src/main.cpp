@@ -248,6 +248,66 @@ Config parseArguments(int argc, char* argv[]) {
 // ============================================
 
 // ============================================
+// Track duration from stream header (passthrough)
+// ============================================
+
+/// Parse track duration (seconds) from the first bytes of an audio stream.
+/// Returns 0 if duration cannot be determined.
+static uint32_t parseTrackDuration(const uint8_t* data, size_t len,
+                                    const std::string& contentType) {
+    // FLAC: parse STREAMINFO (42 bytes after "fLaC" magic)
+    if (contentType.find("flac") != std::string::npos && len >= 42) {
+        if (data[0] == 'f' && data[1] == 'L' && data[2] == 'a' && data[3] == 'C') {
+            // STREAMINFO at offset 8: 18 bytes of format info
+            // Bytes 18-20 (from STREAMINFO start): sample rate (20 bits)
+            // Bytes 21-25: channels (3 bits), bits/sample (5 bits), total samples (36 bits)
+            const uint8_t* si = data + 8;  // Skip "fLaC" + block header
+            uint32_t sampleRate = (static_cast<uint32_t>(si[10]) << 12) |
+                                  (static_cast<uint32_t>(si[11]) << 4) |
+                                  (static_cast<uint32_t>(si[12]) >> 4);
+            uint64_t totalSamples =
+                (static_cast<uint64_t>(si[13] & 0x0F) << 32) |
+                (static_cast<uint64_t>(si[14]) << 24) |
+                (static_cast<uint64_t>(si[15]) << 16) |
+                (static_cast<uint64_t>(si[16]) << 8) |
+                (static_cast<uint64_t>(si[17]));
+            if (sampleRate > 0 && totalSamples > 0) {
+                uint32_t duration = static_cast<uint32_t>(totalSamples / sampleRate);
+                LOG_DEBUG("[Audio] FLAC duration: " << duration << "s ("
+                          << sampleRate << "Hz, " << totalSamples << " samples)");
+                return duration;
+            }
+        }
+    }
+
+    // DSF: parse header for sample count and rate
+    if (contentType.find("dsf") != std::string::npos && len >= 60) {
+        if (data[0] == 'D' && data[1] == 'S' && data[2] == 'D' && data[3] == ' ') {
+            // fmt chunk at offset 28: sample rate at offset 32 (4 bytes LE)
+            // sample count at offset 40 (8 bytes LE)
+            uint32_t sampleRate =
+                data[32] | (data[33] << 8) | (data[34] << 16) | (data[35] << 24);
+            uint64_t sampleCount =
+                static_cast<uint64_t>(data[40]) |
+                (static_cast<uint64_t>(data[41]) << 8) |
+                (static_cast<uint64_t>(data[42]) << 16) |
+                (static_cast<uint64_t>(data[43]) << 24) |
+                (static_cast<uint64_t>(data[44]) << 32) |
+                (static_cast<uint64_t>(data[45]) << 40) |
+                (static_cast<uint64_t>(data[46]) << 48) |
+                (static_cast<uint64_t>(data[47]) << 56);
+            if (sampleRate > 0 && sampleCount > 0) {
+                uint32_t duration = static_cast<uint32_t>(sampleCount / sampleRate);
+                LOG_DEBUG("[Audio] DSF duration: " << duration << "s");
+                return duration;
+            }
+        }
+    }
+
+    return 0;  // Unknown duration
+}
+
+// ============================================
 // Main
 // ============================================
 
@@ -561,6 +621,8 @@ int main(int argc, char* argv[]) {
                     // --- Prebuffer: read HTTP → write raw bytes ---
                     constexpr size_t PREBUFFER_BYTES = 256 * 1024;  // 256 KB
                     uint8_t httpBuf[65536];
+                    uint8_t headerBuf[128];  // First bytes for duration parsing
+                    size_t headerLen = 0;
                     uint64_t totalBytes = 0;
                     size_t prebuffered = 0;
                     bool httpEof = false;
@@ -569,6 +631,13 @@ int main(int argc, char* argv[]) {
                            audioTestRunning.load(std::memory_order_acquire) && !httpEof) {
                         ssize_t n = httpStream->readWithTimeout(httpBuf, sizeof(httpBuf), 100);
                         if (n > 0) {
+                            // Capture first bytes for duration parsing
+                            if (headerLen < sizeof(headerBuf)) {
+                                size_t copy = std::min(static_cast<size_t>(n),
+                                                       sizeof(headerBuf) - headerLen);
+                                std::memcpy(headerBuf + headerLen, httpBuf, copy);
+                                headerLen += copy;
+                            }
                             audioServerPtr->writeAudio(httpBuf, static_cast<size_t>(n));
                             totalBytes += n;
                             prebuffered += n;
@@ -580,6 +649,10 @@ int main(int argc, char* argv[]) {
                     if (prebuffered == 0 || !audioTestRunning.load(std::memory_order_acquire)) {
                         break;
                     }
+
+                    // Parse track duration from stream header
+                    uint32_t trackDurationSec = parseTrackDuration(
+                        headerBuf, headerLen, contentType);
 
                     // --- Start UPnP playback ---
                     audioServerPtr->setReadyToServe();
@@ -637,20 +710,17 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // --- HTTP EOF: wait for renderer to consume data, then send STMd ---
+                    // --- HTTP EOF: wait for track to nearly finish, then send STMd ---
                     if (httpEof && audioTestRunning.load(std::memory_order_acquire)) {
                         LOG_INFO("[Audio] HTTP complete: " << totalBytes
-                                 << " bytes, waiting for renderer...");
+                                 << " bytes, duration=" << trackDurationSec << "s");
 
-                        // Keep updating elapsed while renderer plays from its buffer
+                        // Wait until wall clock reaches near track end (or data consumed)
+                        constexpr uint32_t STMD_LEAD_SEC = 3;
+                        uint32_t stmdTargetSec = (trackDurationSec > STMD_LEAD_SEC)
+                            ? trackDurationSec - STMD_LEAD_SEC : 0;
+
                         while (audioTestRunning.load(std::memory_order_acquire)) {
-                            uint64_t served = audioServerPtr->getBytesServed();
-                            // Renderer consumed all data (within 4KB tolerance)
-                            if (served + 4096 >= totalBytes) break;
-                            // Client disconnected (renderer done reading)
-                            if (!audioServerPtr->isClientConnected()) break;
-
-                            // Update elapsed
                             auto now = std::chrono::steady_clock::now();
                             uint32_t elapsedMs = static_cast<uint32_t>(
                                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -661,14 +731,30 @@ int main(int argc, char* argv[]) {
                             if (elapsedSec >= lastElapsedLog + 10) {
                                 lastElapsedLog = elapsedSec;
                                 LOG_DEBUG("[Audio] Elapsed: " << elapsedSec
-                                          << "s (draining, served=" << served << ")");
+                                          << "s (waiting for track end)");
+                            }
+
+                            // If we know the duration, wait for wall clock
+                            if (trackDurationSec > 0 && elapsedSec >= stmdTargetSec) {
+                                break;
+                            }
+
+                            // Fallback: if duration unknown, wait for data consumed
+                            if (trackDurationSec == 0) {
+                                uint64_t served = audioServerPtr->getBytesServed();
+                                if (served + 4096 >= totalBytes) break;
+                                if (!audioServerPtr->isClientConnected()) break;
                             }
 
                             std::this_thread::sleep_for(std::chrono::milliseconds(100));
                         }
 
-                        LOG_INFO("[Audio] Stream complete: " << totalBytes
-                                 << " bytes, served=" << audioServerPtr->getBytesServed());
+                        auto now = std::chrono::steady_clock::now();
+                        uint32_t finalElapsed = static_cast<uint32_t>(
+                            std::chrono::duration_cast<std::chrono::seconds>(
+                                now - playStartTime).count());
+                        LOG_INFO("[Audio] STMd at " << finalElapsed << "s (track="
+                                 << trackDurationSec << "s)");
                         slimproto->sendStat(StatEvent::STMd);
                     }
 
