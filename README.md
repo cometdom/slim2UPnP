@@ -173,6 +173,16 @@ cd slim2UPnP
 sudo ./install.sh
 ```
 
+### Update to latest version
+
+```bash
+cd slim2UPnP
+git pull
+sudo ./install.sh
+```
+
+The installer will stop the running service, download/install the latest binary, and restart the service automatically.
+
 That's it. The installer automatically:
 1. Detects your CPU architecture (x86_64, ARM64)
 2. Downloads the right precompiled binary from GitHub Releases
