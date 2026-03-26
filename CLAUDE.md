@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with this repository.
 
 **slim2UPnP** is a Slimproto→UPnP bridge in passthrough mode. It proxies audio from LMS directly to a UPnP renderer without decoding — the renderer handles all format decoding. This replaces squeeze2upnp (by Philippe/Ralphy) for users who want to use LMS with a UPnP renderer (e.g., DirettaRendererUPnP).
 
-**Version**: 0.1.0-beta
+**Version**: 0.1.2-beta
 **License**: MIT (no GPL code copied). Slimproto protocol implemented from public documentation.
 
 ## Architecture

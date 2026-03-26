@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.2-beta] - 2026-03-27
+
+### Fixed
+- **Roon compatibility**: auto-detect audio format from magic bytes (fLaC, RIFF, DSD, FRM8, FORM, MP3 sync) when server sends no Content-Type header. URL extension and MIME type are set correctly for the renderer.
+- **GitHub Releases**: CI no longer marks beta tags as prerelease — `install.sh` now finds the latest version correctly
+- **Install script**: simplified dependencies (libupnp only), config merge on update preserves user settings (RENDERER, LMS_SERVER, etc.) while removing obsolete options (DECODER)
+- **WebUI/config**: removed decoder backend option (Native/FFmpeg) — not applicable in passthrough mode
+
+### Changed
+- Version updated to 0.1.2-beta
+- README: added update instructions (`git pull && sudo ./install.sh`)
+
 ## [0.1.0-beta] - 2026-03-26
 
 ### Major
