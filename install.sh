@@ -293,24 +293,24 @@ download_binary() {
 build_from_source() {
     step "Building from source..."
 
-    # Check for cmake
+    # Check for cmake (passthrough mode: only libupnp needed)
     if ! command -v cmake >/dev/null 2>&1; then
         error "CMake not found. Install build dependencies first:"
         case "$DISTRO_ID" in
             ubuntu|debian)
-                echo "  sudo apt install build-essential cmake libflac-dev libupnp-dev"
+                echo "  sudo apt install build-essential cmake libupnp-dev"
                 ;;
             fedora)
-                echo "  sudo dnf install gcc-c++ cmake flac-devel libupnp-devel"
+                echo "  sudo dnf install gcc-c++ cmake libupnp-devel"
                 ;;
             arch|manjaro)
-                echo "  sudo pacman -S base-devel cmake flac libupnp"
+                echo "  sudo pacman -S base-devel cmake libupnp"
                 ;;
             gentoo|gentooplayer)
-                echo "  sudo emerge cmake media-libs/flac net-libs/libupnp"
+                echo "  sudo emerge cmake net-libs/libupnp"
                 ;;
             *)
-                echo "  Install: cmake, g++, libflac-dev, libupnp-dev"
+                echo "  Install: cmake, g++, libupnp-dev"
                 ;;
         esac
         exit 1
@@ -342,44 +342,29 @@ install_runtime_deps() {
         return 0
     fi
 
+    # Passthrough mode: only libupnp is required (no decoder libraries)
     case "$DISTRO_ID" in
         ubuntu|debian)
             step "Installing runtime libraries..."
             apt-get update -qq
-            # Try current naming first, then older package names
-            apt-get install -y -qq libflac12 libupnp17 libmpg123-0 \
-                libvorbisfile3 libavcodec60 libavutil58 2>/dev/null || \
-            apt-get install -y -qq libflac8 libupnp17 libmpg123-0 \
-                libvorbisfile3 libavcodec-extra libavutil58 2>/dev/null || \
-                warn "Some runtime libraries could not be installed — check apt output above"
+            apt-get install -y -qq libupnp17 2>/dev/null || \
+                warn "libupnp could not be installed — check apt output above"
             ;;
         fedora)
             step "Installing runtime libraries..."
-            # Core libraries (always needed)
-            dnf install -y flac-libs libupnp || \
-                warn "Failed to install core libraries (flac-libs, libupnp)"
-            # Optional codec libraries
-            dnf install -y mpg123-libs libvorbis 2>/dev/null || true
-            # FFmpeg — try ffmpeg-free-libs first, fall back to ffmpeg-libs (RPM Fusion)
-            if ! dnf install -y ffmpeg-free-libs 2>/dev/null; then
-                if ! dnf install -y ffmpeg-libs 2>/dev/null; then
-                    warn "FFmpeg libraries not found. Install manually if needed:"
-                    echo "    sudo dnf install ffmpeg-free-libs"
-                    echo "  Or enable RPM Fusion: https://rpmfusion.org/"
-                fi
-            fi
+            dnf install -y libupnp || \
+                warn "Failed to install libupnp"
             ;;
         arch|manjaro)
             step "Installing runtime libraries..."
-            pacman -S --noconfirm --needed flac libupnp mpg123 libvorbis ffmpeg || \
-                warn "Some runtime libraries could not be installed — check pacman output above"
+            pacman -S --noconfirm --needed libupnp || \
+                warn "libupnp could not be installed — check pacman output above"
             ;;
         gentoo|gentooplayer)
-            # Gentoo users typically have these already
-            info "Gentoo: ensure media-libs/flac net-libs/libupnp are installed"
+            info "Gentoo: ensure net-libs/libupnp is installed"
             ;;
         *)
-            info "Check that libFLAC, libupnp, libmpg123, libvorbis are installed"
+            info "Check that libupnp is installed"
             ;;
     esac
 }
@@ -430,12 +415,38 @@ install_systemd() {
         return 1
     fi
 
-    # Configuration
-    if [ ! -f /etc/default/slim2upnp ]; then
+    # Configuration: merge existing values with new template
+    if [ -f /etc/default/slim2upnp ]; then
+        # Save user values from existing config
+        local saved_renderer="" saved_renderer_url="" saved_lms="" saved_player=""
+        local saved_no_dsd="" saved_interface="" saved_http_port="" saved_verbose=""
+        . /etc/default/slim2upnp 2>/dev/null || true
+        saved_renderer="$RENDERER"
+        saved_renderer_url="$RENDERER_URL"
+        saved_lms="$LMS_SERVER"
+        saved_player="$PLAYER_NAME"
+        saved_no_dsd="$NO_DSD"
+        saved_interface="$INTERFACE"
+        saved_http_port="$HTTP_PORT"
+        saved_verbose="$VERBOSE"
+
+        # Install new template
         cp "$config_file" /etc/default/slim2upnp
-        info "Config file: /etc/default/slim2upnp (edit this!)"
+
+        # Re-apply saved values (only non-empty ones)
+        [ -n "$saved_renderer" ] && sed -i "s|^RENDERER=.*|RENDERER=\"$saved_renderer\"|" /etc/default/slim2upnp
+        [ -n "$saved_renderer_url" ] && sed -i "s|^RENDERER_URL=.*|RENDERER_URL=\"$saved_renderer_url\"|" /etc/default/slim2upnp
+        [ -n "$saved_lms" ] && sed -i "s|^LMS_SERVER=.*|LMS_SERVER=\"$saved_lms\"|" /etc/default/slim2upnp
+        [ -n "$saved_player" ] && sed -i "s|^PLAYER_NAME=.*|PLAYER_NAME=\"$saved_player\"|" /etc/default/slim2upnp
+        [ -n "$saved_no_dsd" ] && sed -i "s|^NO_DSD=.*|NO_DSD=\"$saved_no_dsd\"|" /etc/default/slim2upnp
+        [ -n "$saved_interface" ] && sed -i "s|^INTERFACE=.*|INTERFACE=\"$saved_interface\"|" /etc/default/slim2upnp
+        [ -n "$saved_http_port" ] && sed -i "s|^HTTP_PORT=.*|HTTP_PORT=\"$saved_http_port\"|" /etc/default/slim2upnp
+        [ -n "$saved_verbose" ] && sed -i "s|^VERBOSE=.*|VERBOSE=\"$saved_verbose\"|" /etc/default/slim2upnp
+
+        info "Config updated: /etc/default/slim2upnp (your settings preserved)"
     else
-        warn "Config file already exists: /etc/default/slim2upnp (not overwritten)"
+        cp "$config_file" /etc/default/slim2upnp
+        info "Config file: /etc/default/slim2upnp"
     fi
 
     systemctl daemon-reload
@@ -474,12 +485,35 @@ install_openrc() {
         return 1
     fi
 
-    # Configuration (OpenRC uses /etc/conf.d/)
-    if [ ! -f /etc/conf.d/slim2upnp ]; then
+    # Configuration (OpenRC uses /etc/conf.d/): merge existing values
+    if [ -f /etc/conf.d/slim2upnp ]; then
+        local saved_renderer="" saved_renderer_url="" saved_lms="" saved_player=""
+        local saved_no_dsd="" saved_interface="" saved_http_port="" saved_verbose=""
+        . /etc/conf.d/slim2upnp 2>/dev/null || true
+        saved_renderer="$RENDERER"
+        saved_renderer_url="$RENDERER_URL"
+        saved_lms="$LMS_SERVER"
+        saved_player="$PLAYER_NAME"
+        saved_no_dsd="$NO_DSD"
+        saved_interface="$INTERFACE"
+        saved_http_port="$HTTP_PORT"
+        saved_verbose="$VERBOSE"
+
         cp "$config_file" /etc/conf.d/slim2upnp
-        info "Config file: /etc/conf.d/slim2upnp (edit this!)"
+
+        [ -n "$saved_renderer" ] && sed -i "s|^RENDERER=.*|RENDERER=\"$saved_renderer\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_renderer_url" ] && sed -i "s|^RENDERER_URL=.*|RENDERER_URL=\"$saved_renderer_url\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_lms" ] && sed -i "s|^LMS_SERVER=.*|LMS_SERVER=\"$saved_lms\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_player" ] && sed -i "s|^PLAYER_NAME=.*|PLAYER_NAME=\"$saved_player\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_no_dsd" ] && sed -i "s|^NO_DSD=.*|NO_DSD=\"$saved_no_dsd\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_interface" ] && sed -i "s|^INTERFACE=.*|INTERFACE=\"$saved_interface\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_http_port" ] && sed -i "s|^HTTP_PORT=.*|HTTP_PORT=\"$saved_http_port\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_verbose" ] && sed -i "s|^VERBOSE=.*|VERBOSE=\"$saved_verbose\"|" /etc/conf.d/slim2upnp
+
+        info "Config updated: /etc/conf.d/slim2upnp (your settings preserved)"
     else
-        warn "Config file already exists: /etc/conf.d/slim2upnp (not overwritten)"
+        cp "$config_file" /etc/conf.d/slim2upnp
+        info "Config file: /etc/conf.d/slim2upnp"
     fi
 
     # Install WebUI
