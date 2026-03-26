@@ -651,6 +651,12 @@ int main(int argc, char* argv[]) {
                     }
 
                     // Parse track duration from stream header
+                    LOG_DEBUG("[Audio] Header capture: " << headerLen << " bytes"
+                              << " (first 4: " << std::hex
+                              << (headerLen >= 4 ? (int)headerBuf[0] : 0) << " "
+                              << (headerLen >= 4 ? (int)headerBuf[1] : 0) << " "
+                              << (headerLen >= 4 ? (int)headerBuf[2] : 0) << " "
+                              << (headerLen >= 4 ? (int)headerBuf[3] : 0) << std::dec << ")");
                     uint32_t trackDurationSec = parseTrackDuration(
                         headerBuf, headerLen, contentType);
 
