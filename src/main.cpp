@@ -2,16 +2,14 @@
  * @file main.cpp
  * @brief Main entry point for slim2UPnP
  *
- * Slimproto→UPnP bridge with native DSD support.
- * Single process: SlimprotoClient + Decoder + AudioHttpServer + UPnPController.
+ * Slimproto→UPnP bridge: passthrough mode.
+ * Proxies audio streams from LMS to UPnP renderer without decoding.
+ * Single process: SlimprotoClient + AudioHttpServer + UPnPController.
  */
 
 #include "Config.h"
 #include "SlimprotoClient.h"
 #include "HttpStreamClient.h"
-#include "Decoder.h"
-#include "DsdStreamReader.h"
-#include "DsdProcessor.h"
 #include "AudioHttpServer.h"
 #include "UPnPController.h"
 #include "LogLevel.h"
@@ -249,63 +247,6 @@ Config parseArguments(int argc, char* argv[]) {
 // DoP Detection
 // ============================================
 
-static bool detectDoP(const int32_t* samples, size_t numFrames, int channels) {
-    if (numFrames < 16) return false;
-    size_t check = std::min(numFrames, size_t(32));
-    int matches = 0;
-    uint8_t expected = 0;
-    for (size_t i = 0; i < check; i++) {
-        uint8_t marker = static_cast<uint8_t>(
-            (samples[i * channels] >> 24) & 0xFF);
-        if (i == 0) {
-            if (marker != 0x05 && marker != 0xFA) return false;
-            expected = (marker == 0x05) ? 0xFA : 0x05;
-            matches++;
-        } else {
-            if (marker == expected) matches++;
-            expected = (expected == 0x05) ? 0xFA : 0x05;
-        }
-    }
-    return matches >= static_cast<int>(check * 9 / 10);
-}
-
-// ============================================
-// PCM bit depth conversion: S32_LE MSB-aligned → target depth
-// ============================================
-
-/**
- * Convert S32_LE MSB-aligned samples to target bit depth for WAV output.
- * Returns number of bytes written.
- */
-static size_t convertPcmBitDepth(const int32_t* src, uint8_t* dst,
-                                  size_t numSamples, uint32_t targetBitDepth) {
-    switch (targetBitDepth) {
-    case 16:
-        for (size_t i = 0; i < numSamples; i++) {
-            int16_t val = static_cast<int16_t>(src[i] >> 16);
-            dst[i * 2]     = static_cast<uint8_t>(val & 0xFF);
-            dst[i * 2 + 1] = static_cast<uint8_t>((val >> 8) & 0xFF);
-        }
-        return numSamples * 2;
-
-    case 24:
-        for (size_t i = 0; i < numSamples; i++) {
-            int32_t val = src[i] >> 8;
-            dst[i * 3]     = static_cast<uint8_t>(val & 0xFF);
-            dst[i * 3 + 1] = static_cast<uint8_t>((val >> 8) & 0xFF);
-            dst[i * 3 + 2] = static_cast<uint8_t>((val >> 16) & 0xFF);
-        }
-        return numSamples * 3;
-
-    case 32:
-        std::memcpy(dst, src, numSamples * 4);
-        return numSamples * 4;
-
-    default:
-        return 0;
-    }
-}
-
 // ============================================
 // Main
 // ============================================
@@ -316,25 +257,11 @@ int main(int argc, char* argv[]) {
 
     std::cout << "═══════════════════════════════════════════════════════\n"
               << "  slim2UPnP v" << SLIM2UPNP_VERSION << "\n"
-              << "  Slimproto to UPnP bridge with DSD support\n"
+              << "  Slimproto to UPnP bridge (passthrough)\n"
               << "═══════════════════════════════════════════════════════\n"
               << std::endl;
 
-    // Log build capabilities
-    std::cout << "Codecs: FLAC PCM"
-#ifdef ENABLE_MP3
-              << " MP3"
-#endif
-#ifdef ENABLE_OGG
-              << " OGG"
-#endif
-#ifdef ENABLE_AAC
-              << " AAC"
-#endif
-#ifdef ENABLE_FFMPEG
-              << " [FFmpeg available]"
-#endif
-              << " DSD" << std::endl;
+    std::cout << "Mode: passthrough (no decoding)" << std::endl;
 
     Config config = parseArguments(argc, argv);
 
@@ -586,12 +513,7 @@ int main(int argc, char* argv[]) {
                 slimproto->updateElapsed(0, 0);
                 slimproto->updateStreamBytes(0);
 
-                // Start audio decode thread
-                char formatCode = cmd.format;
-                char pcmRate = cmd.pcmSampleRate;
-                char pcmSize = cmd.pcmSampleSize;
-                char pcmChannels = cmd.pcmChannels;
-                char pcmEndian = cmd.pcmEndian;
+                // Start passthrough audio thread
                 audioTestRunning.store(true);
                 audioThreadDone.store(false, std::memory_order_release);
                 uint32_t thisGeneration = streamGeneration.fetch_add(1) + 1;
@@ -599,707 +521,127 @@ int main(int argc, char* argv[]) {
                     &audioTestRunning, &audioThreadDone, &hasPendingTrack,
                     &pendingMutex, &pendingNextTrack, &streamGeneration,
                     thisGeneration,
-                    formatCode, pcmRate, pcmSize, pcmChannels, pcmEndian,
                     servers, &currentSlot, upnpPtr, &config]() {
 
-                    // Local pointer to active server — updated on slot switch
+                    // Local pointer to active server
                     AudioHttpServer* audioServerPtr = servers[currentSlot.load()];
 
-                    bool openFailedInGapless = false;
-
                     // ============================================================
-                    // DSD PATH
-                    // ============================================================
-                    if (formatCode == FORMAT_DSD) {
-                      char dsdPcmRate = pcmRate;
-                      char dsdPcmChannels = pcmChannels;
-                      bool dsdFirstTrack = true;
-                      AudioHttpServer::AudioFormat prevDsdFmt{};
-
-                      while (true) {  // === DSD CHAINING LOOP ===
-                        auto dsdReader = std::make_unique<DsdStreamReader>();
-
-                        uint32_t hintRate = sampleRateFromCode(dsdPcmRate);
-                        uint32_t hintCh = (dsdPcmChannels == '2') ? 2
-                                        : (dsdPcmChannels == '1') ? 1 : 2;
-                        if (hintRate > 0) {
-                            dsdReader->setRawDsdFormat(hintRate, hintCh);
-                        }
-
-                        slimproto->sendStat(StatEvent::STMs);
-
-                        if (!dsdFirstTrack) {
-                            slimproto->updateElapsed(0, 0);
-                            slimproto->updateStreamBytes(0);
-                        }
-
-                        uint8_t httpBuf[65536];
-                        uint64_t totalBytes = 0;
-                        bool formatLogged = false;
-                        uint64_t lastElapsedLog = 0;
-
-                        constexpr size_t DSD_PLANAR_BUF = 16384;
-                        uint8_t planarBuf[DSD_PLANAR_BUF];
-
-                        // DSF block interleave: convert planar [L...][R...] to
-                        // DSF block format [4096 L][4096 R][4096 L][4096 R]...
-                        constexpr size_t DSF_BLOCK_SIZE = 4096;
-                        std::vector<uint8_t> dsfInterleaveBuf;
-
-                        // Convert planar DSD to DSF block-interleaved and write to server
-                        auto writeDsfBlockInterleaved = [&](const uint8_t* planar, size_t totalBytes,
-                                                            uint32_t ch) -> size_t {
-                            if (ch < 2 || totalBytes < 2) {
-                                // Mono: write directly
-                                return audioServerPtr->writeAudio(planar, totalBytes);
-                            }
-                            // Planar layout: [L0..Ln][R0..Rn], each half = totalBytes/2
-                            size_t bytesPerCh = totalBytes / ch;
-                            const uint8_t* left = planar;
-                            const uint8_t* right = planar + bytesPerCh;
-
-                            dsfInterleaveBuf.resize(totalBytes);
-                            size_t outPos = 0;
-                            size_t srcPos = 0;
-
-                            while (srcPos < bytesPerCh) {
-                                size_t blockBytes = std::min(DSF_BLOCK_SIZE, bytesPerCh - srcPos);
-                                // L block
-                                std::memcpy(dsfInterleaveBuf.data() + outPos, left + srcPos, blockBytes);
-                                outPos += blockBytes;
-                                // Pad to DSF_BLOCK_SIZE if needed
-                                if (blockBytes < DSF_BLOCK_SIZE) {
-                                    std::memset(dsfInterleaveBuf.data() + outPos, 0, DSF_BLOCK_SIZE - blockBytes);
-                                    outPos += DSF_BLOCK_SIZE - blockBytes;
-                                }
-                                // R block
-                                std::memcpy(dsfInterleaveBuf.data() + outPos, right + srcPos, blockBytes);
-                                outPos += blockBytes;
-                                if (blockBytes < DSF_BLOCK_SIZE) {
-                                    std::memset(dsfInterleaveBuf.data() + outPos, 0, DSF_BLOCK_SIZE - blockBytes);
-                                    outPos += DSF_BLOCK_SIZE - blockBytes;
-                                }
-                                srcPos += blockBytes;
-                            }
-                            return audioServerPtr->writeAudio(dsfInterleaveBuf.data(), outPos);
-                        };
-
-                        constexpr unsigned int PREBUFFER_MS = 3000;
-                        uint64_t pushedDsdBytes = 0;
-                        bool serverReady = false;
-                        AudioHttpServer::AudioFormat audioFmt{};
-                        uint32_t detectedChannels = 2;
-                        uint32_t dsdBitRate = 0;
-                        uint64_t byteRateTotal = 0;
-
-                        bool httpEof = false;
-                        bool stmdSent = false;
-                        bool gaplessWaitDone = false;
-                        auto gaplessWaitStart = std::chrono::steady_clock::now();
-                        constexpr int GAPLESS_WAIT_MS = 2000;
-
-                        while (audioTestRunning.load(std::memory_order_acquire) &&
-                               (!httpEof || dsdReader->availableBytes() > 0 ||
-                                !dsdReader->isFinished() ||
-                                (stmdSent && !gaplessWaitDone))) {
-
-                            // === PHASE 1: HTTP read + feed ===
-                            constexpr size_t DSD_BUF_MAX = 1048576;
-                            bool gotData = false;
-                            if (!httpEof && dsdReader->availableBytes() < DSD_BUF_MAX) {
-                                if (httpStream->isConnected()) {
-                                    ssize_t n = httpStream->readWithTimeout(httpBuf, sizeof(httpBuf), 2);
-                                    if (n > 0) {
-                                        gotData = true;
-                                        totalBytes += n;
-                                        slimproto->updateStreamBytes(totalBytes);
-                                        dsdReader->feed(httpBuf, static_cast<size_t>(n));
-                                    } else if (n < 0 || !httpStream->isConnected()) {
-                                        httpEof = true;
-                                        dsdReader->setEof();
-                                    }
-                                } else {
-                                    httpEof = true;
-                                    dsdReader->setEof();
-                                }
-                            }
-
-                            // === GAPLESS: send STMd early ===
-                            if (httpEof && serverReady && !stmdSent) {
-                                stmdSent = true;
-                                gaplessWaitStart = std::chrono::steady_clock::now();
-                                LOG_INFO("[Audio] DSD stream complete: " << totalBytes
-                                         << " bytes, " << pushedDsdBytes << " DSD bytes pushed");
-                                slimproto->sendStat(StatEvent::STMd);
-                            }
-
-                            // === GAPLESS: wait for next track ===
-                            if (stmdSent && dsdReader->availableBytes() == 0) {
-                                if (hasPendingTrack.load(std::memory_order_acquire)) {
-                                    LOG_INFO("[Gapless] DSD pending detected, chaining");
-                                    break;
-                                }
-                                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::steady_clock::now() - gaplessWaitStart).count();
-                                if (elapsed >= GAPLESS_WAIT_MS) {
-                                    gaplessWaitDone = true;
-                                    break;
-                                }
-                                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                                continue;
-                            }
-
-                            // === PHASE 2: Format detection ===
-                            if (!formatLogged && dsdReader->isFormatReady()) {
-                                formatLogged = true;
-                                const auto& fmt = dsdReader->getFormat();
-                                dsdBitRate = fmt.sampleRate;
-                                detectedChannels = fmt.channels;
-                                byteRateTotal = (static_cast<uint64_t>(dsdBitRate) / 8) * detectedChannels;
-
-                                audioFmt.sampleRate = dsdBitRate;
-                                audioFmt.bitDepth = 1;
-                                audioFmt.channels = detectedChannels;
-                                audioFmt.isDSD = true;
-                                audioFmt.dsdRate = dsdBitRate;
-
-                                LOG_INFO("[Audio] DSD: " << DsdProcessor::rateName(dsdBitRate)
-                                         << ", " << detectedChannels << " ch");
-                            }
-
-                            // === PHASE 3: Prebuffer ===
-                            if (formatLogged && !serverReady) {
-                                // Same-format gapless: skip setup
-                                if (!dsdFirstTrack &&
-                                    audioFmt.dsdRate == prevDsdFmt.dsdRate &&
-                                    audioFmt.channels == prevDsdFmt.channels) {
-                                    LOG_INFO("[Gapless] DSD same format, continuing stream");
-                                    serverReady = true;
-                                    slimproto->sendStat(StatEvent::STMl);
-                                    continue;
-                                }
-
-                                size_t targetBytes = static_cast<size_t>(byteRateTotal * PREBUFFER_MS / 1000);
-                                if (targetBytes > DSD_BUF_MAX * 3 / 4) {
-                                    targetBytes = DSD_BUF_MAX * 3 / 4;
-                                }
-
-                                if (dsdReader->availableBytes() >= targetBytes || httpEof) {
-                                    if (dsdReader->availableBytes() == 0) continue;
-
-                                    // Set format and prebuffer to AudioHttpServer
-                                    audioServerPtr->setFormat(audioFmt);
-
-                                    // Flush prebuffer to ring buffer
-                                    while (audioTestRunning.load(std::memory_order_relaxed)) {
-                                        if (audioServerPtr->getBufferLevel() > 0.90f) break;
-                                        size_t bytes = dsdReader->readPlanar(planarBuf, DSD_PLANAR_BUF);
-                                        if (bytes == 0) break;
-                                        writeDsfBlockInterleaved(planarBuf, bytes, detectedChannels);
-                                        pushedDsdBytes += bytes;
-                                    }
-
-                                    // Prebuffer done — allow renderer to connect
-                                    audioServerPtr->setReadyToServe();
-
-                                    pushedDsdBytes = 0;
-                                    slimproto->updateElapsed(0, 0);
-
-                                    // Start UPnP playback in background thread
-                                    serverReady = true;
-                                    std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                                 &streamGeneration, thisGeneration]() {
-                                        upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                        // Only send Play+STMl if this stream is still current
-                                        if (streamGeneration.load() == thisGeneration) {
-                                            upnpPtr->play();
-                                            slimproto->sendStat(StatEvent::STMl);
-                                        }
-                                    }).detach();
-                                }
-                                continue;
-                            }
-
-                            // === PHASE 4: Push DSD data ===
-                            if (serverReady && dsdReader->availableBytes() > 0) {
-                                if (audioServerPtr->getBufferLevel() <= 0.95f) {
-                                    size_t bytes = dsdReader->readPlanar(planarBuf, DSD_PLANAR_BUF);
-                                    if (bytes > 0) {
-                                        writeDsfBlockInterleaved(planarBuf, bytes, detectedChannels);
-                                        pushedDsdBytes += bytes;
-                                    }
-                                } else {
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                }
-                            }
-
-                            // === PHASE 5: Update elapsed ===
-                            if (serverReady && byteRateTotal > 0) {
-                                uint64_t totalMs = (pushedDsdBytes * 1000) / byteRateTotal;
-                                uint32_t elapsedSec = static_cast<uint32_t>(totalMs / 1000);
-                                uint32_t elapsedMs = static_cast<uint32_t>(totalMs);
-                                slimproto->updateElapsed(elapsedSec, elapsedMs);
-
-                                if (elapsedSec >= lastElapsedLog + 10) {
-                                    lastElapsedLog = elapsedSec;
-                                    LOG_DEBUG("[Audio] DSD elapsed: " << elapsedSec << "s");
-                                }
-                            }
-
-                            // === Anti-busy-loop ===
-                            if (!gotData && dsdReader->availableBytes() == 0 && !httpEof) {
-                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                            }
-
-                            if (dsdReader->hasError()) {
-                                LOG_ERROR("[Audio] DSD stream reader error");
-                                break;
-                            }
-                        }
-
-                        // === GAPLESS CHECK: chain to next DSD track? ===
-                        if (hasPendingTrack.load(std::memory_order_acquire)) {
-                            std::shared_ptr<PendingTrack> next;
-                            {
-                                std::lock_guard<std::mutex> lock(pendingMutex);
-                                next = std::move(pendingNextTrack);
-                                pendingNextTrack.reset();
-                                hasPendingTrack.store(false, std::memory_order_release);
-                            }
-                            if (next && next->formatCode == FORMAT_DSD) {
-                                LOG_INFO("[Gapless] Chaining to next DSD track");
-                                httpStream->disconnect();
-                                httpStream = next->httpClient;
-                                dsdPcmRate = next->pcmSampleRate;
-                                dsdPcmChannels = next->pcmChannels;
-                                prevDsdFmt = audioFmt;
-                                dsdFirstTrack = false;
-                                continue;
-                            }
-                            LOG_INFO("[Gapless] Cross-format (DSD→PCM), ending chain");
-                        }
-
-                        break;  // Exit DSD chaining loop
-                      }
-
-                      if (audioTestRunning.load(std::memory_order_acquire)) {
-                          audioServerPtr->signalEndOfStream();
-                          slimproto->sendStat(StatEvent::STMu);
-                      }
-                      audioThreadDone.store(true, std::memory_order_release);
-                      return;
-                    }
-
-                    // ============================================================
-                    // PCM/FLAC PATH with gapless chaining
+                    // PASSTHROUGH: proxy LMS stream to renderer without decoding
                     // ============================================================
                     {
-                    char curFormatCode = formatCode;
-                    char curPcmRate = pcmRate;
-                    char curPcmSize = pcmSize;
-                    char curPcmChannels = pcmChannels;
-                    char curPcmEndian = pcmEndian;
-                    bool pcmFirstTrack = true;
-                    AudioHttpServer::AudioFormat prevAudioFmt{};
+                    bool firstTrack = true;
 
-                    constexpr size_t DECODE_CACHE_MAX_SAMPLES = 9216000;
-                    std::vector<int32_t> decodeCache;
-                    size_t decodeCachePos = 0;
-                    bool serverReady = false;
-                    AudioHttpServer::AudioFormat audioFmt{};
-                    int detectedChannels = 2;
+                    while (true) {  // === TRACK LOOP (passthrough) ===
 
-                    // Conversion buffer: S32_LE → target bit depth
-                    constexpr size_t MAX_DECODE_FRAMES = 1024;
-                    std::vector<uint8_t> convBuf(MAX_DECODE_FRAMES * 2 * 4);  // Max: stereo 32-bit
-
-                    auto cacheFrames = [&]() -> size_t {
-                        return (decodeCache.size() - decodeCachePos) /
-                               std::max(detectedChannels, 1);
-                    };
-
-                    while (true) {  // === PCM/FLAC CHAINING LOOP ===
-
-                    auto decoder = Decoder::create(curFormatCode, config.decoderBackend);
-                    if (!decoder) {
-                        LOG_ERROR("[Audio] Unsupported format: " << curFormatCode);
-                        slimproto->sendStat(StatEvent::STMn);
-                        if (pcmFirstTrack) {
-                            audioThreadDone.store(true, std::memory_order_release);
-                            return;
-                        }
-                        break;
-                    }
-
-                    if (curFormatCode == FORMAT_PCM) {
-                        uint32_t sr = sampleRateFromCode(curPcmRate);
-                        uint32_t bd = sampleSizeFromCode(curPcmSize);
-                        uint32_t ch = (curPcmChannels == '2') ? 2
-                                    : (curPcmChannels == '1') ? 1 : 0;
-                        bool be = (curPcmEndian == '0');
-                        if (sr > 0 && bd > 0 && ch > 0) {
-                            decoder->setRawPcmFormat(sr, bd, ch, be);
-                        }
-                    }
+                    // --- Extract Content-Type from LMS HTTP response ---
+                    std::string contentType = httpStream->getContentType();
+                    if (contentType.empty()) contentType = "application/octet-stream";
+                    LOG_INFO("[Audio] Passthrough: " << contentType);
 
                     slimproto->sendStat(StatEvent::STMs);
 
-                    if (!pcmFirstTrack) {
-                        slimproto->updateElapsed(0, 0);
-                        slimproto->updateStreamBytes(0);
+                    // --- Setup AudioHttpServer for this track ---
+                    if (!firstTrack) {
+                        // Switch to next slot for gapless
+                        int nextSlot = 1 - currentSlot.load();
+                        servers[nextSlot]->reset();
+                        audioServerPtr = servers[nextSlot];
+                        LOG_INFO("[Gapless] Preparing slot " << nextSlot);
                     }
 
+                    // Configure passthrough MIME type and ring buffer
+                    AudioHttpServer::AudioFormat audioFmt{};
+                    audioFmt.sampleRate = 44100;  // Default for ring buffer sizing
+                    audioFmt.bitDepth = 24;
+                    audioFmt.channels = 2;
+                    audioServerPtr->setFormat(audioFmt);
+                    audioServerPtr->setPassthroughMime(contentType);
+
+                    // --- Prebuffer: read HTTP → write raw bytes ---
+                    constexpr size_t PREBUFFER_BYTES = 256 * 1024;  // 256 KB
                     uint8_t httpBuf[65536];
-                    int32_t decodeBuf[MAX_DECODE_FRAMES * 2];
                     uint64_t totalBytes = 0;
-                    bool formatLogged = false;
-                    uint64_t lastElapsedLog = 0;
-
-                    constexpr unsigned int PREBUFFER_MS_NORMAL = 3000;
-                    constexpr unsigned int PREBUFFER_MS_HIGHRATE = 3000;
-                    unsigned int prebufferMs = PREBUFFER_MS_NORMAL;
-                    uint64_t pushedFrames = 0;
-
-                    bool dopDetected = false;
+                    size_t prebuffered = 0;
                     bool httpEof = false;
-                    bool stmdSent = false;
-                    uint64_t totalDecodedBytes = 0;  // Total audio bytes (for STMd timing)
-                    uint64_t bytesServedBaseline = 0; // Bytes served at Play time
-                    std::atomic<bool> playStarted{false}; // Set when Play confirmed
 
-                    while (audioTestRunning.load(std::memory_order_acquire) &&
-                           (!httpEof || cacheFrames() > 0 || !stmdSent)) {
-
-                        // ========== PHASE 1a: HTTP read ==========
-                        bool gotData = false;
-                        size_t cacheSamples = decodeCache.size() - decodeCachePos;
-                        if (cacheSamples < DECODE_CACHE_MAX_SAMPLES && !httpEof) {
-                            if (httpStream->isConnected()) {
-                                ssize_t n = httpStream->readWithTimeout(
-                                    httpBuf, sizeof(httpBuf), 2);
-                                if (n > 0) {
-                                    gotData = true;
-                                    totalBytes += n;
-                                    slimproto->updateStreamBytes(totalBytes);
-                                    decoder->feed(httpBuf, static_cast<size_t>(n));
-                                } else if (n < 0 || !httpStream->isConnected()) {
-                                    httpEof = true;
-                                    decoder->setEof();
-                                }
-                            } else {
-                                httpEof = true;
-                                decoder->setEof();
-                            }
-                        }
-
-                        // === GAPLESS: send STMd when renderer is near end ===
-                        if (httpEof && serverReady && !stmdSent) {
-                            // Calculate total decoded audio bytes (once)
-                            if (totalDecodedBytes == 0 && decoder->isFormatReady()) {
-                                auto fmt = decoder->getFormat();
-                                uint64_t decoded = decoder->getDecodedSamples();
-                                totalDecodedBytes = decoded * audioFmt.bytesPerFrame();
-                                uint32_t durationSec = fmt.sampleRate > 0
-                                    ? static_cast<uint32_t>(decoded / fmt.sampleRate) : 0;
-                                LOG_INFO("[Audio] Stream decoded: " << totalBytes
-                                         << " bytes, " << decoded
-                                         << " frames (" << durationSec << "s)");
-                            }
-                            // Send STMd when renderer has consumed within 3s of the end
-                            constexpr uint64_t STMD_LEAD_BYTES = 3;  // seconds
-                            uint64_t served = audioServerPtr->getBytesServed();
-                            uint64_t leadBytes = audioFmt.bytesPerSecond() * STMD_LEAD_BYTES;
-                            if (totalDecodedBytes > 0 &&
-                                served + leadBytes >= totalDecodedBytes) {
-                                stmdSent = true;
-                                uint64_t servedSec = audioFmt.bytesPerSecond() > 0
-                                    ? served / audioFmt.bytesPerSecond() : 0;
-                                LOG_INFO("[Audio] STMd at served " << servedSec << "s");
-                                slimproto->sendStat(StatEvent::STMd);
-                            }
-                        }
-
-                        // ========== PHASE 1b: Drain decoder into cache ==========
-                        if (decodeCache.size() - decodeCachePos < DECODE_CACHE_MAX_SAMPLES) {
-                            while (true) {
-                                size_t frames = decoder->readDecoded(
-                                    decodeBuf, MAX_DECODE_FRAMES);
-                                if (frames == 0) break;
-                                decodeCache.insert(decodeCache.end(), decodeBuf,
-                                    decodeBuf + frames * detectedChannels);
-                            }
-                        }
-
-                        // ========== PHASE 2: Format detection ==========
-                        if (!formatLogged && decoder->isFormatReady()) {
-                            formatLogged = true;
-                            auto fmt = decoder->getFormat();
-                            LOG_INFO("[Audio] Decoding: " << fmt.sampleRate << " Hz, "
-                                     << fmt.bitDepth << "-bit, " << fmt.channels << " ch");
-
-                            // Gapless: always use SetNextAVTransportURI
-                            // (each track is a separate HTTP stream)
-                            if (serverReady && !pcmFirstTrack) {
-                                // Drain remaining old cache into old slot
-                                if (cacheFrames() > 0) {
-                                    LOG_INFO("[Gapless] Draining " << cacheFrames()
-                                             << " old frames to slot " << currentSlot.load());
-                                    while (cacheFrames() > 0 &&
-                                           audioTestRunning.load(std::memory_order_acquire)) {
-                                        if (audioServerPtr->getBufferLevel() > 0.95f) {
-                                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                            continue;
-                                        }
-                                        size_t push = std::min(cacheFrames(), MAX_DECODE_FRAMES);
-                                        const int32_t* ptr = decodeCache.data() + decodeCachePos;
-                                        size_t convBytes = convertPcmBitDepth(
-                                            ptr, convBuf.data(),
-                                            push * detectedChannels, audioFmt.bitDepth);
-                                        if (convBytes > 0) {
-                                            audioServerPtr->writeAudio(convBuf.data(), convBytes);
-                                        }
-                                        decodeCachePos += push * detectedChannels;
-                                    }
-                                }
-                                // Switch to next slot for new track
-                                serverReady = false;
-                            }
-
-                            detectedChannels = fmt.channels;
-                            audioFmt.sampleRate = fmt.sampleRate;
-                            audioFmt.bitDepth = (fmt.bitDepth <= 24) ? 24 : 32;
-                            audioFmt.channels = fmt.channels;
-
-                            if (fmt.sampleRate > 192000) {
-                                prebufferMs = PREBUFFER_MS_HIGHRATE;
-                            }
-
-                            // Resize conversion buffer for this format
-                            convBuf.resize(MAX_DECODE_FRAMES * detectedChannels *
-                                           (audioFmt.bitDepth / 8));
-                        }
-
-                        // ========== PHASE 3: Prebuffer + UPnP setup ==========
-                        if (formatLogged && !serverReady) {
-                            auto fmt = decoder->getFormat();
-                            size_t targetFrames = static_cast<size_t>(
-                                fmt.sampleRate) * prebufferMs / 1000;
-                            if (cacheFrames() >= targetFrames || httpEof) {
-                                size_t prebufFrames = cacheFrames();
-                                if (prebufFrames == 0) continue;
-
-                                // Detect DoP
-                                if (!dopDetected && cacheFrames() >= 32) {
-                                    const int32_t* samples =
-                                        decodeCache.data() + decodeCachePos;
-                                    if (detectDoP(samples, cacheFrames(), detectedChannels)) {
-                                        dopDetected = true;
-                                        audioFmt.bitDepth = 24;
-                                        LOG_INFO("[Audio] DoP detected — passthrough as 24-bit PCM");
-                                    }
-                                }
-
-                                // For gapless, switch to next slot
-                                if (!pcmFirstTrack) {
-                                    int nextSlot = 1 - currentSlot.load();
-                                    servers[nextSlot]->reset();
-                                    audioServerPtr = servers[nextSlot];
-                                    LOG_INFO("[Gapless] Preparing slot " << nextSlot
-                                             << " for next track");
-                                }
-
-                                // Prebuffer into ring buffer
-                                audioServerPtr->setFormat(audioFmt);
-
-                                const int32_t* ptr = decodeCache.data() + decodeCachePos;
-                                size_t remaining = prebufFrames;
-                                size_t actualPushed = 0;
-                                while (remaining > 0 &&
-                                       audioTestRunning.load(std::memory_order_relaxed)) {
-                                    if (audioServerPtr->getBufferLevel() > 0.95f) break;
-                                    size_t chunk = std::min(remaining, MAX_DECODE_FRAMES);
-                                    size_t samples = chunk * detectedChannels;
-                                    size_t convBytes = convertPcmBitDepth(
-                                        ptr, convBuf.data(), samples, audioFmt.bitDepth);
-                                    if (convBytes > 0) {
-                                        audioServerPtr->writeAudio(convBuf.data(), convBytes);
-                                    }
-                                    ptr += samples;
-                                    remaining -= chunk;
-                                    actualPushed += chunk;
-                                }
-                                decodeCachePos += actualPushed * detectedChannels;
-
-                                // Prebuffer done — allow renderer to connect
-                                audioServerPtr->setReadyToServe();
-
-                                // Reset elapsed for new track
-                                pushedFrames = 0;
-                                playStarted.store(false, std::memory_order_release);
-                                bytesServedBaseline = 0;
-                                totalDecodedBytes = 0;
-                                stmdSent = false;
-                                lastElapsedLog = 0;
-                                slimproto->updateElapsed(0, 0);
-                                slimproto->updateStreamBytes(0);
-
-                                if (pcmFirstTrack) {
-                                    // First track: SetAVTransportURI + Play
-                                    serverReady = true;
-                                    std::thread([upnpPtr, audioServerPtr, &slimproto,
-                                                 &streamGeneration, thisGeneration,
-                                                 &bytesServedBaseline, &playStarted]() {
-                                        upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
-                                        if (streamGeneration.load() == thisGeneration) {
-                                            upnpPtr->play();
-                                            // Capture baseline: bytes already served during prebuffer
-                                            bytesServedBaseline = audioServerPtr->getBytesServed();
-                                            playStarted.store(true, std::memory_order_release);
-                                            slimproto->sendStat(StatEvent::STMl);
-                                        }
-                                    }).detach();
-                                } else {
-                                    // Gapless: SetNextAVTransportURI on new slot,
-                                    // then signal end on old slot so renderer transitions
-                                    int oldSlot = currentSlot.load();
-                                    int newSlot = 1 - oldSlot;
-                                    std::string nextURL = servers[newSlot]->getStreamURL();
-                                    LOG_INFO("[Gapless] SetNextAVTransportURI: " << nextURL);
-                                    upnpPtr->setNextAVTransportURI(nextURL);
-
-                                    // Signal end of old stream — renderer will transition
-                                    servers[oldSlot]->signalEndOfStream();
-
-                                    // Switch active slot + capture baseline
-                                    currentSlot.store(newSlot);
-                                    bytesServedBaseline = audioServerPtr->getBytesServed();
-                                    playStarted.store(true, std::memory_order_release);
-                                    serverReady = true;
-                                    slimproto->sendStat(StatEvent::STMl);
-                                    LOG_INFO("[Gapless] Active slot now " << newSlot);
-                                }
-                            }
-                            continue;
-                        }
-
-                        // ========== PHASE 4: Push from cache to AudioHttpServer ==========
-                        if (serverReady && cacheFrames() > 0) {
-                            if (audioServerPtr->getBufferLevel() <= 0.95f) {
-                                size_t push = std::min(cacheFrames(), MAX_DECODE_FRAMES);
-                                const int32_t* ptr = decodeCache.data() + decodeCachePos;
-                                size_t samples = push * detectedChannels;
-                                size_t convBytes = convertPcmBitDepth(
-                                    ptr, convBuf.data(), samples, audioFmt.bitDepth);
-                                if (convBytes > 0) {
-                                    audioServerPtr->writeAudio(convBuf.data(), convBytes);
-                                }
-                                decodeCachePos += samples;
-                                pushedFrames += push;
-                            } else {
-                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                            }
-                        }
-
-                        // ========== PHASE 5: Update elapsed (bytes-served minus baseline) ==========
-                        if (serverReady && playStarted.load(std::memory_order_acquire)) {
-                            uint64_t bps = audioFmt.bytesPerSecond();
-                            if (bps > 0) {
-                                uint64_t served = audioServerPtr->getBytesServed();
-                                uint64_t playedBytes = (served > bytesServedBaseline)
-                                    ? served - bytesServedBaseline : 0;
-                                uint32_t elapsedSec = static_cast<uint32_t>(playedBytes / bps);
-                                uint32_t elapsedMs = static_cast<uint32_t>(
-                                    playedBytes * 1000 / bps);
-                                slimproto->updateElapsed(elapsedSec, elapsedMs);
-
-                                if (elapsedSec >= lastElapsedLog + 10) {
-                                    lastElapsedLog = elapsedSec;
-                                    LOG_DEBUG("[Audio] Elapsed: " << elapsedSec << "s"
-                                              << " cache=" << cacheFrames() << "f");
-                                }
-                            }
-                        }
-
-                        // ========== PHASE 6: Compact cache ==========
-                        if (decodeCachePos > 500000) {
-                            decodeCache.erase(decodeCache.begin(),
-                                decodeCache.begin() + decodeCachePos);
-                            decodeCachePos = 0;
-                        }
-
-                        // ========== PHASE 7: Anti-busy-loop ==========
-                        if (!gotData && cacheFrames() == 0 && !httpEof) {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        }
-
-                        if (decoder->hasError()) {
-                            LOG_ERROR("[Audio] Decoder error");
-                            break;
+                    while (prebuffered < PREBUFFER_BYTES &&
+                           audioTestRunning.load(std::memory_order_acquire) && !httpEof) {
+                        ssize_t n = httpStream->readWithTimeout(httpBuf, sizeof(httpBuf), 100);
+                        if (n > 0) {
+                            audioServerPtr->writeAudio(httpBuf, static_cast<size_t>(n));
+                            totalBytes += n;
+                            prebuffered += n;
+                        } else if (n < 0 || !httpStream->isConnected()) {
+                            httpEof = true;
                         }
                     }
 
-                    // Drain decoder after HTTP EOF
-                    decoder->setEof();
-                    while (!decoder->isFinished() && !decoder->hasError() &&
-                           audioTestRunning.load(std::memory_order_acquire)) {
-                        size_t frames = decoder->readDecoded(decodeBuf, MAX_DECODE_FRAMES);
-                        if (frames == 0) break;
-                        decodeCache.insert(decodeCache.end(), decodeBuf,
-                            decodeBuf + frames * detectedChannels);
+                    if (prebuffered == 0 || !audioTestRunning.load(std::memory_order_acquire)) {
+                        break;
                     }
 
-                    // === GAPLESS CHECK ===
-                    bool gaplessPending = hasPendingTrack.load(std::memory_order_acquire);
+                    // --- Start UPnP playback ---
+                    audioServerPtr->setReadyToServe();
+                    slimproto->updateElapsed(0, 0);
+                    slimproto->updateStreamBytes(0);
 
-                    if (!gaplessPending) {
-                        // Drain remaining cache
-                        while (serverReady && cacheFrames() > 0 &&
-                               audioTestRunning.load(std::memory_order_acquire)) {
-                            if (audioServerPtr->getBufferLevel() > 0.95f) {
-                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                continue;
+                    if (firstTrack) {
+                        // First track: SetAVTransportURI + Play
+                        std::thread([upnpPtr, audioServerPtr, &slimproto,
+                                     &streamGeneration, thisGeneration]() {
+                            upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
+                            if (streamGeneration.load() == thisGeneration) {
+                                upnpPtr->play();
+                                slimproto->sendStat(StatEvent::STMl);
                             }
-                            size_t push = std::min(cacheFrames(), MAX_DECODE_FRAMES);
-                            const int32_t* ptr = decodeCache.data() + decodeCachePos;
-                            size_t samples = push * detectedChannels;
-                            size_t convBytes = convertPcmBitDepth(
-                                ptr, convBuf.data(), samples, audioFmt.bitDepth);
-                            if (convBytes > 0) {
-                                audioServerPtr->writeAudio(convBuf.data(), convBytes);
-                            }
-                            decodeCachePos += samples;
-
-                            // Update elapsed from bytes served (minus baseline)
-                            uint64_t bps = audioFmt.bytesPerSecond();
-                            if (bps > 0) {
-                                uint64_t served = audioServerPtr->getBytesServed();
-                                uint64_t playedBytes = (served > bytesServedBaseline)
-                                    ? served - bytesServedBaseline : 0;
-                                slimproto->updateElapsed(
-                                    static_cast<uint32_t>(playedBytes / bps),
-                                    static_cast<uint32_t>(playedBytes * 1000 / bps));
-                            }
-                        }
-
-                        // Wait for gapless next track
-                        if (!hasPendingTrack.load(std::memory_order_acquire) &&
-                            audioTestRunning.load(std::memory_order_acquire)) {
-                            LOG_DEBUG("[Gapless] PCM: waiting for next track...");
-                            auto waitStart = std::chrono::steady_clock::now();
-                            constexpr int GAPLESS_WAIT_MS = 2000;
-                            while (!hasPendingTrack.load(std::memory_order_acquire) &&
-                                   audioTestRunning.load(std::memory_order_acquire) &&
-                                   std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - waitStart).count() < GAPLESS_WAIT_MS) {
-                                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                            }
-                        }
+                        }).detach();
                     } else {
-                        LOG_INFO("[Gapless] Next track pending, keeping "
-                                 << cacheFrames() << " frames in cache");
+                        // Gapless: SetNextAVTransportURI + signal end on old slot
+                        int oldSlot = currentSlot.load();
+                        int newSlot = 1 - oldSlot;
+                        std::string nextURL = servers[newSlot]->getStreamURL();
+                        LOG_INFO("[Gapless] SetNextAVTransportURI: " << nextURL);
+                        upnpPtr->setNextAVTransportURI(nextURL);
+                        servers[oldSlot]->signalEndOfStream();
+                        currentSlot.store(newSlot);
+                        slimproto->sendStat(StatEvent::STMl);
+                        LOG_INFO("[Gapless] Active slot now " << newSlot);
                     }
 
-                    // === Chain to next PCM/FLAC track? ===
+                    // --- Stream loop: read HTTP → write to ring buffer ---
+                    while (audioTestRunning.load(std::memory_order_acquire) && !httpEof) {
+                        ssize_t n = httpStream->readWithTimeout(httpBuf, sizeof(httpBuf), 10);
+                        if (n > 0) {
+                            audioServerPtr->writeAudio(httpBuf, static_cast<size_t>(n));
+                            totalBytes += n;
+                            slimproto->updateStreamBytes(totalBytes);
+                        } else if (n < 0 || !httpStream->isConnected()) {
+                            httpEof = true;
+                        }
+                    }
+
+                    // --- HTTP EOF: send STMd immediately ---
+                    if (httpEof && audioTestRunning.load(std::memory_order_acquire)) {
+                        LOG_INFO("[Audio] Stream complete: " << totalBytes << " bytes");
+                        slimproto->sendStat(StatEvent::STMd);
+                    }
+
+                    // --- Gapless: wait for next track ---
+                    if (!hasPendingTrack.load(std::memory_order_acquire) &&
+                        audioTestRunning.load(std::memory_order_acquire)) {
+                        LOG_DEBUG("[Gapless] Waiting for next track...");
+                        auto waitStart = std::chrono::steady_clock::now();
+                        constexpr int GAPLESS_WAIT_MS = 2000;
+                        while (!hasPendingTrack.load(std::memory_order_acquire) &&
+                               audioTestRunning.load(std::memory_order_acquire) &&
+                               std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - waitStart).count() < GAPLESS_WAIT_MS) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                        }
+                    }
+
+                    // --- Chain to next track? ---
                     if (hasPendingTrack.load(std::memory_order_acquire)) {
                         std::shared_ptr<PendingTrack> next;
                         {
@@ -1308,35 +650,30 @@ int main(int argc, char* argv[]) {
                             pendingNextTrack.reset();
                             hasPendingTrack.store(false, std::memory_order_release);
                         }
-                        if (next && next->formatCode != FORMAT_DSD) {
-                            LOG_INFO("[Gapless] Chaining to next PCM/FLAC track");
+                        if (next) {
+                            LOG_INFO("[Gapless] Chaining to next track");
                             httpStream->disconnect();
                             httpStream = next->httpClient;
-                            curFormatCode = next->formatCode;
-                            curPcmRate = next->pcmSampleRate;
-                            curPcmSize = next->pcmSampleSize;
-                            curPcmChannels = next->pcmChannels;
-                            curPcmEndian = next->pcmEndian;
-                            prevAudioFmt = audioFmt;
-                            pcmFirstTrack = false;
-                            if (decodeCachePos > 0) {
-                                decodeCache.erase(decodeCache.begin(),
-                                    decodeCache.begin() + decodeCachePos);
-                                decodeCachePos = 0;
-                            }
-                            continue;
+
+                            // Send RESP/STMh for new track
+                            slimproto->sendStat(StatEvent::STMc);
+                            slimproto->sendResp(next->responseHeaders);
+                            slimproto->sendStat(StatEvent::STMh);
+
+                            firstTrack = false;
+                            continue;  // Loop back for next track
                         }
-                        LOG_INFO("[Gapless] Cross-format (PCM→DSD), ending chain");
                     }
 
-                    break;  // Exit PCM/FLAC chaining loop
-                    }  // end chaining loop
-                    }  // end PCM/FLAC scope
+                    break;  // No more tracks
+                    }  // end track loop
 
-                    if (audioTestRunning.load(std::memory_order_acquire) && !openFailedInGapless) {
+                    // Signal end of stream if still running
+                    if (audioTestRunning.load(std::memory_order_acquire)) {
                         audioServerPtr->signalEndOfStream();
                         slimproto->sendStat(StatEvent::STMu);
                     }
+                    }  // end passthrough scope
                     audioThreadDone.store(true, std::memory_order_release);
                 });
                 break;

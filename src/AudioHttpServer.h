@@ -76,6 +76,10 @@ public:
     /// This creates the ring buffer but does NOT allow clients to read yet.
     void setFormat(const AudioFormat& format);
 
+    /// Set MIME type for passthrough mode (e.g., "audio/x-flac").
+    /// When set, handleClient serves raw bytes with this MIME type (no WAV/DSF header).
+    void setPassthroughMime(const std::string& contentType);
+
     /// Signal that prebuffering is done and clients can start reading.
     /// Call after filling the ring buffer with initial data.
     void setReadyToServe();
@@ -84,6 +88,9 @@ public:
 
     /// MIME type for current format (e.g., "audio/wav", "audio/dsf").
     std::string getMimeType() const;
+
+    /// URL file extension based on MIME type (e.g., ".flac", ".dsf")
+    std::string getStreamExtension() const;
 
     // --- Audio data (called from audio/decode thread) ---
 
@@ -147,6 +154,7 @@ private:
 
     // --- Audio format ---
     AudioFormat m_format;
+    std::string m_passthroughMime;  // If set, serve raw bytes with this MIME type
     std::atomic<bool> m_formatReady{false};
     std::atomic<bool> m_readyToServe{false};  // Set after prebuffer is done
 

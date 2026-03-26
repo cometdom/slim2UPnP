@@ -298,5 +298,28 @@ bool HttpStreamClient::parseResponseHeaders() {
         }
     }
 
+    // Parse Content-Type header (case-insensitive)
+    m_contentType.clear();
+    size_t ctPos = lowerHeaders.find("content-type:");
+    if (ctPos != std::string::npos) {
+        size_t valStart = ctPos + 13;  // strlen("content-type:")
+        while (valStart < lowerHeaders.size() && lowerHeaders[valStart] == ' ') {
+            valStart++;
+        }
+        size_t valEnd = lowerHeaders.find("\r\n", valStart);
+        if (valEnd == std::string::npos) valEnd = lowerHeaders.size();
+        // Use original case from headerBuf
+        m_contentType = headerBuf.substr(valStart, valEnd - valStart);
+        // Strip any parameters (e.g., "audio/flac; charset=utf-8")
+        size_t semiPos = m_contentType.find(';');
+        if (semiPos != std::string::npos) {
+            m_contentType = m_contentType.substr(0, semiPos);
+        }
+        // Trim trailing whitespace
+        while (!m_contentType.empty() && m_contentType.back() == ' ') {
+            m_contentType.pop_back();
+        }
+    }
+
     return true;
 }

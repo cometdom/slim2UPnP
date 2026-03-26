@@ -43,6 +43,9 @@ public:
     const std::string& getResponseHeaders() const { return m_responseHeaders; }
     int getHttpStatus() const { return m_httpStatus; }
 
+    // Content-Type from HTTP response (e.g., "audio/x-flac", "audio/dsf")
+    const std::string& getContentType() const { return m_contentType; }
+
     // Total bytes received (audio data only, after headers)
     uint64_t getBytesReceived() const { return m_bytesReceived; }
 
@@ -54,6 +57,7 @@ private:
     std::atomic<bool> m_connected{false};
 
     std::string m_responseHeaders;
+    std::string m_contentType;
     int m_httpStatus = 0;
     uint64_t m_bytesReceived = 0;
 

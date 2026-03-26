@@ -142,15 +142,40 @@ void AudioHttpServer::stop() {
 // ============================================================================
 
 std::string AudioHttpServer::getStreamURL() const {
-    std::string ext = m_format.isDSD ? "audio.dsf" : "audio.wav";
+    std::string ext = getStreamExtension();
     return "http://" + m_localIP + ":" + std::to_string(m_port) + "/" + ext;
 }
 
+std::string AudioHttpServer::getStreamExtension() const {
+    if (!m_passthroughMime.empty()) {
+        // Map MIME type to file extension
+        if (m_passthroughMime.find("flac") != std::string::npos) return "audio.flac";
+        if (m_passthroughMime.find("dsf") != std::string::npos) return "audio.dsf";
+        if (m_passthroughMime.find("dff") != std::string::npos) return "audio.dff";
+        if (m_passthroughMime.find("wav") != std::string::npos) return "audio.wav";
+        if (m_passthroughMime.find("aiff") != std::string::npos) return "audio.aiff";
+        if (m_passthroughMime.find("mpeg") != std::string::npos) return "audio.mp3";
+        if (m_passthroughMime.find("mp3") != std::string::npos) return "audio.mp3";
+        if (m_passthroughMime.find("aac") != std::string::npos) return "audio.aac";
+        if (m_passthroughMime.find("mp4") != std::string::npos) return "audio.m4a";
+        if (m_passthroughMime.find("ogg") != std::string::npos) return "audio.ogg";
+        return "audio.bin";
+    }
+    return m_format.isDSD ? "audio.dsf" : "audio.wav";
+}
+
 std::string AudioHttpServer::getMimeType() const {
+    if (!m_passthroughMime.empty()) {
+        return m_passthroughMime;
+    }
     if (m_format.isDSD) {
-        return "application/octet-stream";  // DSF — no standard MIME, renderers accept this
+        return "application/octet-stream";
     }
     return "audio/wav";
+}
+
+void AudioHttpServer::setPassthroughMime(const std::string& contentType) {
+    m_passthroughMime = contentType;
 }
 
 // ============================================================================
@@ -238,6 +263,7 @@ void AudioHttpServer::reset() {
     m_endOfStream.store(true);
     m_formatReady.store(false);
     m_readyToServe.store(false);
+    m_passthroughMime.clear();
 
     // Disconnect current client to force re-fetch
     {
@@ -482,18 +508,20 @@ void AudioHttpServer::handleClient(int clientSocket) {
         return;
     }
 
-    // Send audio container header (WAV or DSF)
-    std::vector<uint8_t> containerHeader;
-    if (m_format.isDSD) {
-        containerHeader = buildDsfHeader();
-    } else {
-        containerHeader = buildWavHeader();
-    }
+    // Send audio container header (WAV or DSF) — skip in passthrough mode
+    if (m_passthroughMime.empty()) {
+        std::vector<uint8_t> containerHeader;
+        if (m_format.isDSD) {
+            containerHeader = buildDsfHeader();
+        } else {
+            containerHeader = buildWavHeader();
+        }
 
-    if (!containerHeader.empty()) {
-        if (send(clientSocket, containerHeader.data(), containerHeader.size(), MSG_NOSIGNAL) < 0) {
-            LOG_ERROR("[AudioHttpServer] Failed to send container header: " << strerror(errno));
-            return;
+        if (!containerHeader.empty()) {
+            if (send(clientSocket, containerHeader.data(), containerHeader.size(), MSG_NOSIGNAL) < 0) {
+                LOG_ERROR("[AudioHttpServer] Failed to send container header: " << strerror(errno));
+                return;
+            }
         }
     }
 
