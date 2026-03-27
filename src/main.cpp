@@ -762,12 +762,11 @@ int main(int argc, char* argv[]) {
                                 break;
                             }
 
-                            // Fallback: if duration unknown, wait for data consumed
-                            if (trackDurationSec == 0) {
-                                uint64_t served = audioServerPtr->getBytesServed();
-                                if (served + 4096 >= totalBytes) break;
-                                if (!audioServerPtr->isClientConnected()) break;
-                            }
+                            // Duration unknown: keep waiting and updating elapsed.
+                            // Don't send STMd based on bytes-served — the renderer
+                            // may still have minutes of audio in its buffer.
+                            // The loop exits when audioTestRunning becomes false
+                            // (strm-q from LMS/Roon) which is the natural track end.
 
                             std::this_thread::sleep_for(std::chrono::milliseconds(100));
                         }
