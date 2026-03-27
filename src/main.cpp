@@ -562,13 +562,17 @@ int main(int argc, char* argv[]) {
                 slimproto->updateStreamBytes(0);
 
                 // Start passthrough audio thread
+                char formatCode = cmd.format;
+                char pcmRate = cmd.pcmSampleRate;
+                char pcmSize = cmd.pcmSampleSize;
+                char pcmChannels = cmd.pcmChannels;
                 audioTestRunning.store(true);
                 audioThreadDone.store(false, std::memory_order_release);
                 uint32_t thisGeneration = streamGeneration.fetch_add(1) + 1;
                 audioTestThread = std::thread([&httpStream, &slimproto,
                     &audioTestRunning, &audioThreadDone, &hasPendingTrack,
                     &pendingMutex, &pendingNextTrack, &streamGeneration,
-                    thisGeneration,
+                    thisGeneration, formatCode, pcmRate, pcmSize, pcmChannels,
                     servers, &currentSlot, upnpPtr, &config]() {
 
                     // Local pointer to active server
@@ -671,6 +675,27 @@ int main(int argc, char* argv[]) {
                         if (contentType != "application/octet-stream") {
                             audioServerPtr->setPassthroughMime(contentType);
                         }
+                    }
+
+                    // Fallback for raw PCM: use strm-s format code + generate WAV header
+                    // Roon sends raw PCM without RIFF header or Content-Type
+                    if (contentType == "application/octet-stream" && formatCode == 'p') {
+                        uint32_t sr = sampleRateFromCode(pcmRate);
+                        uint32_t bd = sampleSizeFromCode(pcmSize);
+                        uint32_t ch = (pcmChannels == '2') ? 2 : (pcmChannels == '1') ? 1 : 2;
+                        if (sr == 0) sr = 44100;
+                        if (bd == 0) bd = 16;
+
+                        AudioHttpServer::AudioFormat pcmFmt{};
+                        pcmFmt.sampleRate = sr;
+                        pcmFmt.bitDepth = bd;
+                        pcmFmt.channels = ch;
+                        audioServerPtr->setFormat(pcmFmt);
+                        // Clear passthrough MIME → AudioHttpServer will generate WAV header
+                        audioServerPtr->setPassthroughMime("");
+                        contentType = "audio/wav";
+                        LOG_INFO("[Audio] Raw PCM detected (format=p), "
+                                 "serving as WAV (" << sr << "Hz/" << bd << "bit/" << ch << "ch)");
                     }
 
                     // Parse track duration from stream header
