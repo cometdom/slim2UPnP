@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.4-beta] - 2026-03-27
+
+### Fixed
+- **Roon gapless**: STMd drain delay (10s after renderer consumes all data) enables proper track transitions when duration is unknown
+- **Roon PCM passthrough**: raw PCM (format=p) now served with generated WAV header using Slimproto strm-s parameters (rate, size, channels). Renderer receives valid RIFF/WAV instead of unknown `/audio.bin`
+- **Roon track truncation**: when track duration is unknown (FLAC with `total_samples=0`), STMd is deferred until renderer finishes, preventing premature stop
+- **Stream drain**: `signalEndOfStream()` called after HTTP EOF so AudioHttpServer ring buffer drains properly and client disconnect is detected
+- **WebUI OpenRC support** (GentooPlayer): service restart detects init system and uses `rc-service` for OpenRC
+
+### Known Limitations
+- Roon PCM at ≥192kHz/24bit produces white noise (endianness/padding mismatch — under investigation)
+- Roon progress bar frozen (Roon uses its own timer, not Slimproto elapsed)
+
+### Changed
+- Version updated to 0.1.4-beta
+
 ## [0.1.3-beta] - 2026-03-27
 
 ### Fixed
