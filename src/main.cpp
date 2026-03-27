@@ -758,7 +758,12 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // --- HTTP EOF: wait for track to nearly finish, then send STMd ---
+                    // --- HTTP EOF: signal end of stream so ring buffer can drain ---
+                    if (httpEof) {
+                        audioServerPtr->signalEndOfStream();
+                    }
+
+                    // --- Wait for track to nearly finish, then send STMd ---
                     if (httpEof && audioTestRunning.load(std::memory_order_acquire)) {
                         LOG_INFO("[Audio] HTTP complete: " << totalBytes
                                  << " bytes, duration=" << trackDurationSec << "s");
