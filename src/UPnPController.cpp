@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Dominique (cometdom)
+// This file is part of slim2UPnP. See LICENSE for details.
+
 /**
  * @file UPnPController.cpp
  * @brief UPnP control point implementation using libupnp (pupnp)

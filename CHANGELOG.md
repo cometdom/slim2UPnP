@@ -14,6 +14,7 @@
 - Roon progress bar frozen (Roon uses its own timer, not Slimproto elapsed)
 
 ### Changed
+- **License changed from MIT to GPL v3** (dual licensing: commercial license available)
 - Version updated to 0.1.4-beta
 
 ## [0.1.3-beta] - 2026-03-27

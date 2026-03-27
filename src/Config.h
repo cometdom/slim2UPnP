@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Dominique (cometdom)
+// This file is part of slim2UPnP. See LICENSE for details.
+
 /**
  * @file Config.h
  * @brief Configuration for slim2UPnP

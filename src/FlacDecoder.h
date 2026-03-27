@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Dominique (cometdom)
+// This file is part of slim2UPnP. See LICENSE for details.
+
 /**
  * @file FlacDecoder.h
  * @brief FLAC stream decoder using libFLAC

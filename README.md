@@ -271,6 +271,8 @@ Gapless playback uses the standard UPnP mechanism: dual AudioHttpServer slots (A
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+GNU General Public License v3.0. See [LICENSE](LICENSE).
+
+Commercial licensing available — contact via [GitHub Issues](https://github.com/cometdom/slim2UPnP/issues).
 
 Slimproto protocol implemented from public documentation (wiki.lyrion.org). No code copied from GPL projects.
