@@ -336,6 +336,73 @@ int UPnPController::handleEvent(Upnp_EventType eventType, const void* event) {
         m_discoveryCv.notify_all();
         break;
 
+    case UPNP_DISCOVERY_ADVERTISEMENT_BYEBYE: {
+        // Renderer is shutting down (e.g., service restart)
+        auto* discovery = static_cast<const UpnpDiscovery*>(event);
+        const char* deviceId = UpnpDiscovery_get_DeviceID_cstr(discovery);
+
+        if (deviceId && m_ready.load() &&
+            std::string(deviceId) == m_renderer.uuid) {
+            LOG_WARN("[UPnP] Renderer " << m_renderer.friendlyName
+                     << " announced BYEBYE — marking unavailable");
+            m_ready.store(false);
+        }
+        break;
+    }
+
+    case UPNP_DISCOVERY_ADVERTISEMENT_ALIVE: {
+        // Renderer is back (e.g., after service restart)
+        auto* discovery = static_cast<const UpnpDiscovery*>(event);
+        const char* location = UpnpDiscovery_get_Location_cstr(discovery);
+        const char* deviceId = UpnpDiscovery_get_DeviceID_cstr(discovery);
+
+        if (deviceId && location && !m_ready.load() &&
+            std::string(deviceId) == m_renderer.uuid) {
+            LOG_INFO("[UPnP] Renderer " << m_renderer.friendlyName
+                     << " is back — re-parsing description");
+
+            // Re-download and parse device description to get fresh URLs
+            IXML_Document* xmlDoc = nullptr;
+            int ret = UpnpDownloadXmlDoc(location, &xmlDoc);
+            if (ret == UPNP_E_SUCCESS && xmlDoc) {
+                std::string baseUrl = getXmlElementValue(xmlDoc, "URLBase");
+                if (baseUrl.empty()) {
+                    auto pos = std::string(location).find("://");
+                    if (pos != std::string::npos) {
+                        auto pathPos = std::string(location).find('/', pos + 3);
+                        baseUrl = (pathPos != std::string::npos)
+                            ? std::string(location).substr(0, pathPos)
+                            : std::string(location);
+                    }
+                }
+
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_renderer.location = location;
+                m_renderer.baseURL = baseUrl;
+
+                std::string ctrlUrl, eventUrl;
+                if (findServiceURLs(xmlDoc, AVTRANSPORT_TYPE, ctrlUrl, eventUrl)) {
+                    m_renderer.avTransportControlURL = resolveURL(baseUrl, ctrlUrl);
+                    m_renderer.avTransportEventURL = resolveURL(baseUrl, eventUrl);
+                }
+                if (findServiceURLs(xmlDoc, RENDERING_CONTROL_TYPE, ctrlUrl, eventUrl)) {
+                    m_renderer.renderingControlURL = resolveURL(baseUrl, ctrlUrl);
+                }
+                if (findServiceURLs(xmlDoc, CONNECTION_MANAGER_TYPE, ctrlUrl, eventUrl)) {
+                    m_renderer.connectionManagerURL = resolveURL(baseUrl, ctrlUrl);
+                }
+
+                ixmlDocument_free(xmlDoc);
+                m_ready.store(true);
+                LOG_INFO("[UPnP] Renderer reconnected: " << m_renderer.friendlyName
+                         << " control=" << m_renderer.avTransportControlURL);
+            } else {
+                LOG_WARN("[UPnP] Failed to re-parse renderer description");
+            }
+        }
+        break;
+    }
+
     default:
         break;
     }
@@ -627,6 +694,14 @@ IXML_Document* UPnPController::sendAction(
         if (response) {
             ixmlDocument_free(response);
             response = nullptr;
+        }
+        // Connection-level failures indicate renderer may have restarted
+        if (ret == UPNP_E_SOCKET_CONNECT || ret == UPNP_E_SOCKET_ERROR ||
+            ret == UPNP_E_BAD_RESPONSE) {
+            if (m_ready.load()) {
+                LOG_WARN("[UPnP] Renderer appears unreachable — marking unavailable");
+                m_ready.store(false);
+            }
         }
     }
 
