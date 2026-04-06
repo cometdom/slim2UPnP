@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.8-beta] - 2026-04-06
+
+### Fixed
+- **SIGILL crash on older x86 CPUs** (Ivy Bridge, Celeron J4125, etc.): CI was not passing `TARGET_MARCH` to cmake, so the auto-detection used the CI runner's AVX2 support, compiling the "v2" binary with v3 instructions. Now explicitly passes `-DTARGET_MARCH=v2` to override auto-detection. (Reported by suur13, Hoorna)
+
+### Changed
+- Version updated to 0.1.8-beta
+
 ## [0.1.7-beta] - 2026-04-05
 
 ### Fixed
