@@ -667,9 +667,9 @@ case "${1:-}" in
         # No argument: try local build first, then download
         if [ -f "$SCRIPT_DIR/build/$BINARY_NAME" ]; then
             # Check if local build is up to date with source
-            local build_ver=""
+            build_ver=""
             build_ver="$("$SCRIPT_DIR/build/$BINARY_NAME" --version 2>&1 | grep -oP 'v\K[0-9]+\.[0-9]+\.[0-9]+-?[a-z]*' | head -1)" || true
-            local src_ver=""
+            src_ver=""
             src_ver="$(grep -oP 'SLIM2UPNP_VERSION\s+"\K[^"]+' "$SCRIPT_DIR/src/main.cpp" 2>/dev/null)" || true
 
             if [ -n "$build_ver" ] && [ -n "$src_ver" ] && [ "$build_ver" != "$src_ver" ]; then
