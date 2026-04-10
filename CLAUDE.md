@@ -138,6 +138,13 @@ Key messages: HELO (registration), STAT (status), strm (stream control), audg (v
 - **FLAC/DSF header parsing for duration only** — do NOT decode, just read metadata for STMd timing
 - **Wall clock elapsed** — use `std::chrono::steady_clock` since there are no decoded samples to count
 
+### Raw PCM from Roon (format=p)
+- **Roon sends raw PCM with no Content-Type** (`application/octet-stream`) and no WAV header when FLAC compression is disabled
+- **Magic bytes detection MUST be skipped** when formatCode == 'p' — PCM samples can accidentally match MP3 sync (0xFF 0xE0+) causing false detection → renderer crash (fixed v0.1.7)
+- **Format must be set upfront from strm-s** (`pcmSampleRate`, `pcmSampleSize`, `pcmChannels`, `pcmEndian`) — never call `setFormat()` twice. The second call resets ring buffer positions, causing the prebuffered data to be lost. For 24-bit, the 256KB prebuffer is not a multiple of the 6-byte frame size → byte misalignment → white noise (fixed v0.1.9)
+- **Roon sends little-endian PCM** (`pcmEndian == '1'`) — matches WAV container, no byte-swap needed
+- **We generate a WAV header** (WAVE_FORMAT_PCM, 24-bit packed) — DirettaRendererUPnP decodes via FFmpeg's `pcm_s24le` and uses bit-perfect bypass (`s32/MSB-aligned`)
+
 ### Gapless (v0.1.0 architecture)
 - **Dual AudioHttpServer** (slots A/B): each track is a separate HTTP stream with its own WAV/DSF header
 - **SetNextAVTransportURI**: sent when cache drains, renderer pre-connects to next slot
