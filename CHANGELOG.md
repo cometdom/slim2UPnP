@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.10-beta] - 2026-04-10
+
+### Fixed
+- **`--http-port` / `HTTP_PORT` ignored**: the value was parsed from the CLI and config file but never passed to the AudioHttpServer instances, which always started with auto-selected random ports. Now the specified port is used for slot A and `port+1` for slot B (two consecutive ports are needed for gapless ping-pong). This allows users to open specific ports in their firewall instead of the full ephemeral range. (Reported on GitHub by a user on EndeavourOS/Celeron J4005)
+
+### Changed
+- Version updated to 0.1.10-beta
+- `HTTP_PORT` documentation updated to clarify that two consecutive ports are used
+
 ## [0.1.9-beta] - 2026-04-10
 
 ### Fixed

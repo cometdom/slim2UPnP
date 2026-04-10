@@ -48,6 +48,8 @@ NO_DSD=""
 INTERFACE=""
 
 # Force HTTP server port (leave empty for auto)
+# Two consecutive ports are used: HTTP_PORT (slot A) and HTTP_PORT+1 (slot B)
+# for gapless playback ping-pong. E.g., HTTP_PORT=40000 uses 40000 and 40001.
 HTTP_PORT=""
 
 # ── Logging ───────────────────────────────────────────────────────────────

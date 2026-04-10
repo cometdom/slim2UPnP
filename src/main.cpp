@@ -35,7 +35,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.9-beta"
+#define SLIM2UPNP_VERSION "0.1.10-beta"
 
 // ============================================
 // Globals
@@ -207,6 +207,7 @@ Config parseArguments(int argc, char* argv[]) {
                       << "  --renderer-uuid <uuid> Renderer UUID (exact match)\n"
                       << "  --renderer-url <url>   Direct description URL (skip SSDP discovery)\n"
                       << "  --http-port <port>     HTTP server port (default: auto)\n"
+                      << "                         Uses <port> and <port+1> for gapless slots A/B\n"
                       << "  --interface <iface>    Network interface (default: auto)\n"
                       << "  -l, --list-renderers   List available renderers and exit\n"
                       << "\n"
@@ -387,12 +388,23 @@ int main(int argc, char* argv[]) {
         audioServerB->setLocalIP(serverIP);
     }
 
-    if (!audioServerA->start(0)) {  // Auto port for slot A
-        std::cerr << "Failed to start audio HTTP server A" << std::endl;
+    // If --http-port is specified, use port for slot A and port+1 for slot B.
+    // Otherwise auto-select (port 0).
+    uint16_t portA = config.httpServerPort;
+    uint16_t portB = (config.httpServerPort != 0)
+                     ? static_cast<uint16_t>(config.httpServerPort + 1)
+                     : 0;
+
+    if (!audioServerA->start(portA)) {
+        std::cerr << "Failed to start audio HTTP server A"
+                  << (portA ? " on port " + std::to_string(portA) : "")
+                  << std::endl;
         return 1;
     }
-    if (!audioServerB->start(0)) {  // Auto port for slot B
-        std::cerr << "Failed to start audio HTTP server B" << std::endl;
+    if (!audioServerB->start(portB)) {
+        std::cerr << "Failed to start audio HTTP server B"
+                  << (portB ? " on port " + std::to_string(portB) : "")
+                  << std::endl;
         return 1;
     }
 
