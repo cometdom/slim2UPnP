@@ -767,6 +767,14 @@ int main(int argc, char* argv[]) {
                             httpEof = true;
                         }
 
+                        // Report ring buffer state to LMS so it knows we're consuming data.
+                        // Without this, streamBufSize/streamBufFull stay at 0 and LMS may
+                        // abort the stream around 2 minutes (observed with Qobuz tracks).
+                        slimproto->updateBufferState(
+                            static_cast<uint32_t>(audioServerPtr->getBufferCapacity()),
+                            static_cast<uint32_t>(audioServerPtr->getBufferUsed()),
+                            0, 0);
+
                         // Update elapsed via wall clock since Play
                         auto now = std::chrono::steady_clock::now();
                         uint32_t elapsedMs = static_cast<uint32_t>(
