@@ -115,6 +115,12 @@ public:
     /// Ring buffer fill level (0.0 = empty, 1.0 = full).
     float getBufferLevel() const;
 
+    /// Ring buffer total capacity in bytes.
+    size_t getBufferCapacity() const { return m_ringCapacity; }
+
+    /// Ring buffer currently used bytes (approximate, no lock).
+    size_t getBufferUsed() const;
+
     /// True if a UPnP renderer is currently connected and reading.
     bool isClientConnected() const { return m_clientConnected.load(); }
 

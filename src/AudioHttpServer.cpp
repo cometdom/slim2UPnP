@@ -305,6 +305,14 @@ float AudioHttpServer::getBufferLevel() const {
     return static_cast<float>(used) / static_cast<float>(m_ringCapacity);
 }
 
+size_t AudioHttpServer::getBufferUsed() const {
+    // Approximate — no lock for performance
+    if (m_ringCapacity == 0) return 0;
+    size_t wp = m_writePos;
+    size_t rp = m_readPos;
+    return (wp >= rp) ? (wp - rp) : (m_ringCapacity - rp + wp);
+}
+
 // ============================================================================
 // WAV header
 // ============================================================================
