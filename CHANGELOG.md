@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.12-beta] - 2026-04-11
+
+### Fixed
+- **2-minute stream timeout with LMS/Roon**: Streams (especially Qobuz FLAC via LMS or Roon) would stop around 1m59s–2m00s, while JPlay iOS streaming the same tracks worked fine. Two bugs combined:
+  1. `updateBufferState()` was declared but never called — `streamBufSize`/`streamBufFull` reported as 0 in every STMt
+  2. `bytesRecvHi/Lo` were hardcoded to 0 based on an incorrect assumption about LMS position tracking
+  Fixed by calling `updateBufferState()` in the stream loop with the AudioHttpServer ring buffer size/fill, and reporting real `m_bytesReceived` like Squeezelite does. Roon uses these values to verify the player is actively consuming data and was aborting streams at ~2 minutes when all were 0. (Reported by Dominique)
+
+### Changed
+- Version updated to 0.1.12-beta
+
 ## [0.1.10-beta] - 2026-04-10
 
 ### Fixed
