@@ -145,9 +145,16 @@ slim2upnp --list-renderers
 ### Build from source
 
 ```bash
-# Standard build (auto-detect SIMD: AVX2, AVX-512, NEON...)
+# Standard build with GCC (auto-detect SIMD: AVX2, AVX-512, NEON...)
 cmake -B build
 cmake --build build
+
+# Clang + LTO (Link-Time Optimization — recommended for audio performance)
+cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON
+cmake --build build
+
+# Or via install.sh:
+sudo LLVM=1 ./install.sh --build
 
 # Static binary (portable across distros of same architecture)
 cmake -B build-static -DSTATIC_BUILD=ON
@@ -162,6 +169,8 @@ cmake -B build -DTARGET_MARCH=v2       # x86-64 baseline (maximum compatibility)
 cmake -B build -DTARGET_MARCH=v3       # AVX2 (better performance on modern CPUs)
 cmake -B build -DTARGET_MARCH=v4       # AVX-512
 ```
+
+> **Clang + LTO:** Requires `clang` and `clang++` installed. On Debian/Ubuntu: `sudo apt install clang`, Fedora: `sudo dnf install clang`, Arch: `sudo pacman -S clang`, Gentoo: `sudo emerge clang`.
 
 ## Installation & Configuration
 
