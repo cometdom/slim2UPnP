@@ -316,7 +316,27 @@ build_from_source() {
         exit 1
     fi
 
-    cmake -B "$SCRIPT_DIR/build" -DCMAKE_BUILD_TYPE=Release "$SCRIPT_DIR"
+    # Build options
+    CMAKE_OPTS="-DCMAKE_BUILD_TYPE=Release"
+
+    # Use Clang + LTO if available (better optimization for audio)
+    if [ -n "$LLVM" ]; then
+        if command -v clang >/dev/null 2>&1 && command -v clang++ >/dev/null 2>&1; then
+            info "Using Clang + LTO (LLVM=$LLVM)"
+            CMAKE_OPTS="$CMAKE_OPTS -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON"
+        else
+            warn "LLVM requested but clang/clang++ not found, falling back to GCC"
+            case "$DISTRO_ID" in
+                ubuntu|debian)  echo "  Install with: sudo apt install clang" ;;
+                fedora)         echo "  Install with: sudo dnf install clang" ;;
+                arch|manjaro)   echo "  Install with: sudo pacman -S clang" ;;
+                gentoo|gentooplayer) echo "  Install with: sudo emerge clang" ;;
+                *)              echo "  Install: clang" ;;
+            esac
+        fi
+    fi
+
+    cmake -B "$SCRIPT_DIR/build" $CMAKE_OPTS "$SCRIPT_DIR"
     cmake --build "$SCRIPT_DIR/build" -j"$(nproc)"
 
     BINARY_SRC="$SCRIPT_DIR/build/$BINARY_NAME"
