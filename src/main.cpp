@@ -35,7 +35,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.14-beta"
+#define SLIM2UPNP_VERSION "0.1.15-beta"
 
 // ============================================
 // Globals
@@ -605,6 +605,7 @@ int main(int argc, char* argv[]) {
                     // ============================================================
                     {
                     bool firstTrack = true;
+                    std::string prevContentType;  // Track content type changes for gapless
 
                     while (true) {  // === TRACK LOOP (passthrough) ===
 
@@ -736,8 +737,27 @@ int main(int argc, char* argv[]) {
                     slimproto->updateElapsed(0, 0);
                     slimproto->updateStreamBytes(0);
 
-                    if (firstTrack) {
-                        // First track: SetAVTransportURI + Play
+                    // Detect cross-format change (e.g., FLAC→WAV)
+                    bool crossFormat = !firstTrack &&
+                                       !prevContentType.empty() &&
+                                       prevContentType != contentType;
+
+                    if (firstTrack || crossFormat) {
+                        // Cold start (or cross-format restart):
+                        // Stop + SetAVTransportURI + Play.
+                        // Cross-format transitions can't use SetNextAVTransportURI
+                        // because the renderer's anticipated preload consumes ring
+                        // buffer data (including the header), which gets overwritten
+                        // by the circular buffer before the real playback starts.
+                        if (crossFormat) {
+                            LOG_INFO("[Gapless] Cross-format change ("
+                                     << prevContentType << " → " << contentType
+                                     << "), using cold restart");
+                            int oldSlot = currentSlot.load();
+                            servers[oldSlot]->signalEndOfStream();
+                            upnpPtr->stop();
+                            currentSlot.store(1 - oldSlot);
+                        }
                         std::thread([upnpPtr, audioServerPtr, &slimproto,
                                      &streamGeneration, thisGeneration]() {
                             upnpPtr->setAVTransportURI(audioServerPtr->getStreamURL());
@@ -747,7 +767,7 @@ int main(int argc, char* argv[]) {
                             }
                         }).detach();
                     } else {
-                        // Gapless: SetNextAVTransportURI + signal end on old slot
+                        // Gapless same-format: SetNextAVTransportURI + signal end on old slot
                         int oldSlot = currentSlot.load();
                         int newSlot = 1 - oldSlot;
                         std::string nextURL = servers[newSlot]->getStreamURL();
@@ -758,6 +778,8 @@ int main(int argc, char* argv[]) {
                         slimproto->sendStat(StatEvent::STMl);
                         LOG_INFO("[Gapless] Active slot now " << newSlot);
                     }
+
+                    prevContentType = contentType;
 
                     // --- Stream loop: read HTTP → write to ring buffer ---
                     auto playStartTime = std::chrono::steady_clock::now();

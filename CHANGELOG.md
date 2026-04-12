@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.15-beta] - 2026-04-12
+
+### Fixed
+- **Cross-format gapless transitions** (FLAC→WAV, Qobuz→local): `SetNextAVTransportURI` triggers an "anticipated preload" in DirettaRendererUPnP where the renderer opens a short-lived HTTP connection to probe the format. This consumes data from the ring buffer (including the WAV/FLAC header), and the circular buffer overwrites the original data before the real playback connection arrives. Now cross-format transitions use `Stop + SetAVTransportURI + Play` (cold restart) instead of `SetNextAVTransportURI`. Same-format gapless (FLAC→FLAC) still uses `SetNextAVTransportURI` as before.
+- Reverted the ineffective ring buffer readPos restore from v0.1.14 (circular buffer overwrites made it useless)
+
+### Changed
+- Version updated to 0.1.15-beta
+
 ## [0.1.14-beta] - 2026-04-12
 
 ### Fixed

@@ -503,14 +503,6 @@ void AudioHttpServer::handleClient(int clientSocket) {
     }
     if (!m_readyToServe.load() || !m_running.load()) return;
 
-    // Save ring buffer read position so we can restore it if the client
-    // disconnects prematurely (e.g., UPnP anticipated preload probing).
-    size_t savedReadPos;
-    {
-        std::lock_guard<std::mutex> lock(m_ringMutex);
-        savedReadPos = m_readPos;
-    }
-
     // Build HTTP response headers
     std::string mimeType = getMimeType();
     std::string responseHeader =
@@ -579,13 +571,6 @@ void AudioHttpServer::handleClient(int clientSocket) {
                     if (n < 0) {
                         LOG_DEBUG("[AudioHttpServer] Client write error: " << strerror(errno));
                     }
-                    // Restore read position so the next client (e.g., after
-                    // UPnP anticipated preload) gets the full stream.
-                    {
-                        std::lock_guard<std::mutex> lock(m_ringMutex);
-                        m_readPos = savedReadPos;
-                    }
-                    m_bytesServed.store(0, std::memory_order_relaxed);
                     return;  // Client disconnected
                 }
                 sent += static_cast<size_t>(n);
