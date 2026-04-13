@@ -25,11 +25,23 @@ jobs:
           - variant: x64-v2
             march: v2
             cflags: "-march=x86-64-v2"
+            compiler: gcc
             desc: "x86_64 baseline (any Intel/AMD 64-bit)"
           - variant: x64-v3
             march: v3
             cflags: "-march=x86-64-v3 -mavx2 -mfma"
+            compiler: gcc
             desc: "x86_64 AVX2 (Haswell 2013+)"
+          - variant: x64-v2-clang-lto
+            march: v2
+            cflags: "-march=x86-64-v2"
+            compiler: clang
+            desc: "x86_64 baseline, Clang + LTO"
+          - variant: x64-v3-clang-lto
+            march: v3
+            cflags: "-march=x86-64-v3 -mavx2 -mfma"
+            compiler: clang
+            desc: "x86_64 AVX2, Clang + LTO"
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +51,9 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/src \
             -w /src \
+            -e COMPILER="${{ matrix.compiler }}" \
+            -e CFLAGS_VARIANT="${{ matrix.cflags }}" \
+            -e MARCH="${{ matrix.march }}" \
             alpine:3.21 sh -c '
               set -e
 
@@ -47,11 +62,23 @@ jobs:
                 libogg-dev libogg-static \
                 wget xz
 
+              # Install Clang + LLD if Clang build requested
+              CMAKE_COMPILER_OPTS=""
+              LIBUPNP_CC=""
+              LIBFLAC_C_COMPILER=""
+              if [ "$COMPILER" = "clang" ]; then
+                apk add --no-cache clang lld llvm
+                # Use lld as the linker for Clang builds (required for LTO with musl)
+                CMAKE_COMPILER_OPTS="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld"
+                LIBUPNP_CC="CC=clang"
+                LIBFLAC_C_COMPILER="-DCMAKE_C_COMPILER=clang"
+              fi
+
               # ── Build libupnp from source (static, controlled flags) ──
               wget -q https://github.com/pupnp/pupnp/releases/download/release-1.14.20/libupnp-1.14.20.tar.bz2
               tar xf libupnp-1.14.20.tar.bz2
               cd libupnp-1.14.20
-              CFLAGS="${{ matrix.cflags }}" ./configure \
+              env $LIBUPNP_CC CFLAGS="$CFLAGS_VARIANT" ./configure \
                 --enable-static --disable-shared \
                 --disable-samples --disable-debug
               make -j$(nproc)
@@ -63,7 +90,8 @@ jobs:
               tar xf flac-1.4.3.tar.xz
               cd flac-1.4.3
               cmake -B build -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_C_FLAGS="${{ matrix.cflags }}" \
+                $LIBFLAC_C_COMPILER \
+                -DCMAKE_C_FLAGS="$CFLAGS_VARIANT" \
                 -DBUILD_SHARED_LIBS=OFF \
                 -DBUILD_PROGRAMS=OFF -DBUILD_TESTING=OFF \
                 -DBUILD_DOCS=OFF -DINSTALL_MANPAGES=OFF \
@@ -75,9 +103,10 @@ jobs:
               # ── Build slim2upnp (static, core codecs only) ──
               cmake -B build \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_C_FLAGS="${{ matrix.cflags }}" \
-                -DCMAKE_CXX_FLAGS="${{ matrix.cflags }}" \
-                -DTARGET_MARCH=${{ matrix.march }} \
+                $CMAKE_COMPILER_OPTS \
+                -DCMAKE_C_FLAGS="$CFLAGS_VARIANT" \
+                -DCMAKE_CXX_FLAGS="$CFLAGS_VARIANT" \
+                -DTARGET_MARCH="$MARCH" \
                 -DSTATIC_BUILD=ON \
                 -DNOLOG=ON \
                 -DENABLE_MP3=OFF \
@@ -112,6 +141,16 @@ jobs:
   # ============================================================
   build-aarch64:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: aarch64
+            compiler: gcc
+            desc: "ARM64 (Raspberry Pi 4/5, ARM servers)"
+          - variant: aarch64-clang-lto
+            compiler: clang
+            desc: "ARM64, Clang + LTO"
 
     steps:
       - uses: actions/checkout@v4
@@ -121,11 +160,12 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build static binary in Alpine ARM64 container
+      - name: Build static binary in Alpine ARM64 container (${{ matrix.variant }})
         run: |
           docker run --rm --platform linux/arm64 \
             -v ${{ github.workspace }}:/src \
             -w /src \
+            -e COMPILER="${{ matrix.compiler }}" \
             alpine:3.21 sh -c '
               set -e
 
@@ -134,11 +174,23 @@ jobs:
                 libogg-dev libogg-static \
                 wget xz bzip2
 
+              # Install Clang + LLD if Clang build requested
+              CMAKE_COMPILER_OPTS=""
+              LIBUPNP_CC=""
+              LIBFLAC_C_COMPILER=""
+              if [ "$COMPILER" = "clang" ]; then
+                apk add --no-cache clang lld llvm
+                # Use lld as the linker for Clang builds (required for LTO with musl)
+                CMAKE_COMPILER_OPTS="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld"
+                LIBUPNP_CC="CC=clang"
+                LIBFLAC_C_COMPILER="-DCMAKE_C_COMPILER=clang"
+              fi
+
               # ── Build libupnp from source (static, controlled flags) ──
               wget -q https://github.com/pupnp/pupnp/releases/download/release-1.14.20/libupnp-1.14.20.tar.bz2
               tar xf libupnp-1.14.20.tar.bz2
               cd libupnp-1.14.20
-              ./configure \
+              env $LIBUPNP_CC ./configure \
                 --enable-static --disable-shared \
                 --disable-samples --disable-debug
               make -j$(nproc)
@@ -150,6 +202,7 @@ jobs:
               tar xf flac-1.4.3.tar.xz
               cd flac-1.4.3
               cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                $LIBFLAC_C_COMPILER \
                 -DBUILD_SHARED_LIBS=OFF \
                 -DBUILD_PROGRAMS=OFF -DBUILD_TESTING=OFF \
                 -DBUILD_DOCS=OFF -DINSTALL_MANPAGES=OFF \
@@ -161,6 +214,7 @@ jobs:
               # ── Build slim2upnp (static, core codecs only) ──
               cmake -B build \
                 -DCMAKE_BUILD_TYPE=Release \
+                $CMAKE_COMPILER_OPTS \
                 -DSTATIC_BUILD=ON \
                 -DNOLOG=ON \
                 -DENABLE_MP3=OFF \
@@ -178,13 +232,13 @@ jobs:
         run: file build/slim2upnp
 
       - name: Rename binary
-        run: cp build/slim2upnp slim2upnp-aarch64
+        run: cp build/slim2upnp slim2upnp-${{ matrix.variant }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: slim2upnp-aarch64
-          path: slim2upnp-aarch64
+          name: slim2upnp-${{ matrix.variant }}
+          path: slim2upnp-${{ matrix.variant }}
 
   # ============================================================
   # Create GitHub Release with all binaries
@@ -207,7 +261,10 @@ jobs:
           mkdir -p release
           cp artifacts/slim2upnp-x64-v2/slim2upnp-x64-v2 release/
           cp artifacts/slim2upnp-x64-v3/slim2upnp-x64-v3 release/
+          cp artifacts/slim2upnp-x64-v2-clang-lto/slim2upnp-x64-v2-clang-lto release/
+          cp artifacts/slim2upnp-x64-v3-clang-lto/slim2upnp-x64-v3-clang-lto release/
           cp artifacts/slim2upnp-aarch64/slim2upnp-aarch64 release/
+          cp artifacts/slim2upnp-aarch64-clang-lto/slim2upnp-aarch64-clang-lto release/
           chmod +x release/*
 
           # Generate checksums
@@ -230,11 +287,21 @@ jobs:
 
             ### Download
 
+            **GCC builds:**
+
             | Binary | Architecture | Target |
             |--------|-------------|--------|
             | `slim2upnp-x64-v2` | x86_64 baseline | Any Intel/AMD 64-bit PC |
             | `slim2upnp-x64-v3` | x86_64 AVX2 | Modern PCs (Haswell 2013+) |
             | `slim2upnp-aarch64` | ARM64 | Raspberry Pi 4/5, ARM servers |
+
+            **Clang + LTO builds** (experimental — may offer better audio performance):
+
+            | Binary | Architecture | Target |
+            |--------|-------------|--------|
+            | `slim2upnp-x64-v2-clang-lto` | x86_64 baseline | Any Intel/AMD 64-bit PC |
+            | `slim2upnp-x64-v3-clang-lto` | x86_64 AVX2 | Modern PCs (Haswell 2013+) |
+            | `slim2upnp-aarch64-clang-lto` | ARM64 | Raspberry Pi 4/5, ARM servers |
 
             All binaries are **statically linked** — no shared library dependencies.
             Just download, `chmod +x`, and run on any Linux distribution.
@@ -254,7 +321,10 @@ jobs:
           files: |
             release/slim2upnp-x64-v2
             release/slim2upnp-x64-v3
+            release/slim2upnp-x64-v2-clang-lto
+            release/slim2upnp-x64-v3-clang-lto
             release/slim2upnp-aarch64
+            release/slim2upnp-aarch64-clang-lto
             release/SHA256SUMS
           draft: false
           prerelease: false
