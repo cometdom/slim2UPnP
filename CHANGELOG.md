@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.18-beta] - 2026-04-13
+
+### Added
+- **Clang + LTO release binaries**: precompiled Clang + LTO variants now published on GitHub Releases alongside the GCC builds. Three new binaries: `slim2upnp-x64-v2-clang-lto`, `slim2upnp-x64-v3-clang-lto`, `slim2upnp-aarch64-clang-lto`. May offer better audio performance than GCC builds. (Requested by Hoorna/Alfred)
+
+### Changed
+- Version updated to 0.1.18-beta
+
 ## [0.1.17-beta] - 2026-04-12
 
 ### Fixed

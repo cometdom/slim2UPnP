@@ -35,7 +35,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.17-beta"
+#define SLIM2UPNP_VERSION "0.1.18-beta"
 
 // ============================================
 // Globals
