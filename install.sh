@@ -325,7 +325,7 @@ build_from_source() {
     if [ -n "$LLVM" ]; then
         if command -v clang >/dev/null 2>&1 && command -v clang++ >/dev/null 2>&1; then
             info "Using Clang + LTO (LLVM=$LLVM)"
-            CMAKE_OPTS="$CMAKE_OPTS -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON"
+            CMAKE_OPTS="$CMAKE_OPTS -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLTO_MODE=thin"
         else
             warn "LLVM requested but clang/clang++ not found, falling back to GCC"
             case "$DISTRO_ID" in

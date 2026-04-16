@@ -41,7 +41,8 @@ bool UPnPController::init(const std::string& networkInterface) {
         return false;
     }
 
-    ret = UpnpRegisterClient(ctrlPointCallback, this, &m_clientHandle);
+    ret = UpnpRegisterClient(
+        reinterpret_cast<Upnp_FunPtr>(ctrlPointCallback), this, &m_clientHandle);
     if (ret != UPNP_E_SUCCESS) {
         LOG_ERROR("[UPnP] UpnpRegisterClient failed: " << UpnpGetErrorMessage(ret));
         UpnpFinish();

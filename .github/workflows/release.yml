@@ -69,7 +69,7 @@ jobs:
               if [ "$COMPILER" = "clang" ]; then
                 apk add --no-cache clang lld llvm
                 # Use lld as the linker for Clang builds (required for LTO with musl)
-                CMAKE_COMPILER_OPTS="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld"
+                CMAKE_COMPILER_OPTS="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLTO_MODE=thin -DLINKER=lld"
                 LIBUPNP_CC="CC=clang"
                 LIBFLAC_C_COMPILER="-DCMAKE_C_COMPILER=clang"
               fi
@@ -181,7 +181,7 @@ jobs:
               if [ "$COMPILER" = "clang" ]; then
                 apk add --no-cache clang lld llvm
                 # Use lld as the linker for Clang builds (required for LTO with musl)
-                CMAKE_COMPILER_OPTS="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld"
+                CMAKE_COMPILER_OPTS="-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLTO_MODE=thin -DLINKER=lld"
                 LIBUPNP_CC="CC=clang"
                 LIBFLAC_C_COMPILER="-DCMAKE_C_COMPILER=clang"
               fi

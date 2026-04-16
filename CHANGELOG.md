@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.19-beta] - 2026-04-16
+
+### Fixed
+- **Compilation error with libupnp 1.14.26+**: `UpnpRegisterClient` callback signature changed from `const void*` to `void*` in newer libupnp versions, causing build failure with Clang. Now uses `reinterpret_cast<Upnp_FunPtr>` to support both old and new libupnp signatures. (Reported by sheviks, issue #2)
+
+### Changed
+- **LTO options reworked**: replaced `ENABLE_LTO` (boolean) with `LTO_MODE` (OFF/thin/full). ThinLTO uses CMake IPO, Full LTO uses manual `-flto` flags to avoid the CMake flag conflict that made Full LTO impossible. (Reported by sheviks, issue #2)
+- **Linker selection**: new `LINKER` CMake option (lld, mold, gold) to select linker via `-fuse-ld=`. Useful with Clang + LTO where `lld` is preferred over the default `ld`. (Reported by sheviks, issue #2)
+- Version updated to 0.1.19-beta
+
 ## [0.1.18-beta] - 2026-04-13
 
 ### Added

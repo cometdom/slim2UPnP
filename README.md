@@ -1,4 +1,4 @@
-# slim2UPnP v0.1.18 beta
+# slim2UPnP v0.1.19 beta
 
 Slimproto to UPnP bridge with native DSD support.
 
@@ -149,8 +149,16 @@ slim2upnp --list-renderers
 cmake -B build
 cmake --build build
 
-# Clang + LTO (Link-Time Optimization — recommended for audio performance)
-cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LTO=ON
+# Clang + ThinLTO (recommended for audio performance)
+cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLTO_MODE=thin
+cmake --build build
+
+# Clang + Full LTO (maximum optimization)
+cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLTO_MODE=full
+cmake --build build
+
+# Use lld linker (recommended with Clang + LTO)
+cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DLTO_MODE=full -DLINKER=lld
 cmake --build build
 
 # Or via install.sh:
