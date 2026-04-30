@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(slim2upnp VERSION 0.1.22)
+project(slim2upnp VERSION 0.1.23)
 
 set(CMAKE_CXX_STANDARD 17)
 

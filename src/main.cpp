@@ -35,7 +35,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.22-beta"
+#define SLIM2UPNP_VERSION "0.1.23-beta"
 
 // ============================================
 // Globals
@@ -249,35 +249,50 @@ Config parseArguments(int argc, char* argv[]) {
 // ============================================
 
 // ============================================
-// Track duration from stream header (passthrough)
+// Track info from stream header (passthrough)
 // ============================================
 
-/// Parse track duration (seconds) from the first bytes of an audio stream.
-/// Returns 0 if duration cannot be determined.
-static uint32_t parseTrackDuration(const uint8_t* data, size_t len,
-                                    const std::string& contentType) {
-    // FLAC: parse STREAMINFO (42 bytes after "fLaC" magic)
+struct TrackInfo {
+    uint32_t durationSec = 0;   // 0 = unknown
+    uint32_t sampleRate = 0;    // 0 = unknown
+    uint8_t  bitDepth = 0;      // 0 = unknown
+    uint8_t  channels = 0;      // 0 = unknown
+};
+
+/// Parse track info (duration + format params) from the first bytes of an audio stream.
+/// Fields are 0 when not determinable.
+static TrackInfo parseTrackInfo(const uint8_t* data, size_t len,
+                                const std::string& contentType) {
+    TrackInfo info;
+
+    // FLAC STREAMINFO (offset 8 = after "fLaC" magic + 4-byte block header)
+    //   bits 0-19   sample rate (20 bits)
+    //   bits 20-22  channels - 1 (3 bits)
+    //   bits 23-27  bits per sample - 1 (5 bits)
+    //   bits 28-63  total samples (36 bits)
     if (contentType.find("flac") != std::string::npos && len >= 42) {
         if (data[0] == 'f' && data[1] == 'L' && data[2] == 'a' && data[3] == 'C') {
-            // STREAMINFO at offset 8: 18 bytes of format info
-            // Bytes 18-20 (from STREAMINFO start): sample rate (20 bits)
-            // Bytes 21-25: channels (3 bits), bits/sample (5 bits), total samples (36 bits)
-            const uint8_t* si = data + 8;  // Skip "fLaC" + block header
-            uint32_t sampleRate = (static_cast<uint32_t>(si[10]) << 12) |
-                                  (static_cast<uint32_t>(si[11]) << 4) |
-                                  (static_cast<uint32_t>(si[12]) >> 4);
+            const uint8_t* si = data + 8;
+            info.sampleRate = (static_cast<uint32_t>(si[10]) << 12)
+                            | (static_cast<uint32_t>(si[11]) << 4)
+                            | (static_cast<uint32_t>(si[12]) >> 4);
+            info.channels = static_cast<uint8_t>(((si[12] >> 1) & 0x07) + 1);
+            info.bitDepth = static_cast<uint8_t>(
+                (((si[12] & 0x01) << 4) | (si[13] >> 4)) + 1);
             uint64_t totalSamples =
                 (static_cast<uint64_t>(si[13] & 0x0F) << 32) |
                 (static_cast<uint64_t>(si[14]) << 24) |
                 (static_cast<uint64_t>(si[15]) << 16) |
-                (static_cast<uint64_t>(si[16]) << 8) |
+                (static_cast<uint64_t>(si[16]) <<  8) |
                 (static_cast<uint64_t>(si[17]));
-            if (sampleRate > 0 && totalSamples > 0) {
-                uint32_t duration = static_cast<uint32_t>(totalSamples / sampleRate);
-                LOG_DEBUG("[Audio] FLAC duration: " << duration << "s ("
-                          << sampleRate << "Hz, " << totalSamples << " samples)");
-                return duration;
+            if (info.sampleRate > 0 && totalSamples > 0) {
+                info.durationSec = static_cast<uint32_t>(totalSamples / info.sampleRate);
             }
+            LOG_DEBUG("[Audio] FLAC track: " << info.sampleRate << "Hz, "
+                      << static_cast<int>(info.bitDepth) << "-bit, "
+                      << static_cast<int>(info.channels) << "ch, "
+                      << info.durationSec << "s");
+            return info;
         }
     }
 
@@ -286,7 +301,7 @@ static uint32_t parseTrackDuration(const uint8_t* data, size_t len,
         if (data[0] == 'D' && data[1] == 'S' && data[2] == 'D' && data[3] == ' ') {
             // fmt chunk at offset 28: sample rate at offset 32 (4 bytes LE)
             // sample count at offset 40 (8 bytes LE)
-            uint32_t sampleRate =
+            info.sampleRate =
                 data[32] | (data[33] << 8) | (data[34] << 16) | (data[35] << 24);
             uint64_t sampleCount =
                 static_cast<uint64_t>(data[40]) |
@@ -297,15 +312,14 @@ static uint32_t parseTrackDuration(const uint8_t* data, size_t len,
                 (static_cast<uint64_t>(data[45]) << 40) |
                 (static_cast<uint64_t>(data[46]) << 48) |
                 (static_cast<uint64_t>(data[47]) << 56);
-            if (sampleRate > 0 && sampleCount > 0) {
-                uint32_t duration = static_cast<uint32_t>(sampleCount / sampleRate);
-                LOG_DEBUG("[Audio] DSF duration: " << duration << "s");
-                return duration;
+            if (info.sampleRate > 0 && sampleCount > 0) {
+                info.durationSec = static_cast<uint32_t>(sampleCount / info.sampleRate);
+                LOG_DEBUG("[Audio] DSF duration: " << info.durationSec << "s");
             }
         }
     }
 
-    return 0;  // Unknown duration
+    return info;
 }
 
 // ============================================
@@ -610,6 +624,7 @@ int main(int argc, char* argv[]) {
                     {
                     bool firstTrack = true;
                     std::string prevContentType;  // Track content type changes for gapless
+                    TrackInfo prevTrackInfo;       // Track sample rate / bit depth changes
 
                     while (true) {  // === TRACK LOOP (passthrough) ===
 
@@ -732,19 +747,36 @@ int main(int argc, char* argv[]) {
                                  << audioFmt.channels << "ch)");
                     }
 
-                    // Parse track duration from stream header
-                    uint32_t trackDurationSec = parseTrackDuration(
+                    // Parse track duration + format params from stream header
+                    TrackInfo trackInfo = parseTrackInfo(
                         headerBuf, headerLen, contentType);
+                    uint32_t trackDurationSec = trackInfo.durationSec;
 
                     // --- Start UPnP playback ---
                     audioServerPtr->setReadyToServe();
                     slimproto->updateElapsed(0, 0);
                     slimproto->updateStreamBytes(0);
 
-                    // Detect cross-format change (e.g., FLAC→WAV)
-                    bool crossFormat = !firstTrack &&
+                    // Detect cross-format change. Two cases trigger a cold restart
+                    // (Stop + SetAVTransportURI + Play) instead of SetNextAVTransportURI:
+                    //  1. Container change (FLAC→WAV, etc.): MIME type differs.
+                    //  2. Same container but different sample rate / bit depth / channels
+                    //     (e.g., 96kHz/24bit FLAC → 48kHz/24bit FLAC). The renderer's
+                    //     anticipated preload connection probes the next stream and
+                    //     consumes ring buffer data, which gets overwritten before the
+                    //     real playback connection arrives — final samples are lost,
+                    //     causing the renderer to drain prematurely and miss the next
+                    //     SetNextAVTransportURI window.
+                    bool mimeChanged = !firstTrack &&
                                        !prevContentType.empty() &&
                                        prevContentType != contentType;
+                    bool formatParamsChanged = !firstTrack &&
+                        prevTrackInfo.sampleRate > 0 &&
+                        trackInfo.sampleRate > 0 &&
+                        (prevTrackInfo.sampleRate != trackInfo.sampleRate ||
+                         prevTrackInfo.bitDepth   != trackInfo.bitDepth   ||
+                         prevTrackInfo.channels   != trackInfo.channels);
+                    bool crossFormat = mimeChanged || formatParamsChanged;
 
                     // Elapsed clock — atomic so the PLAYING-state calibration thread
                     // can recalibrate it once the renderer actually starts playing.
@@ -761,9 +793,20 @@ int main(int argc, char* argv[]) {
                         // buffer data (including the header), which gets overwritten
                         // by the circular buffer before the real playback starts.
                         if (crossFormat) {
-                            LOG_INFO("[Gapless] Cross-format change ("
-                                     << prevContentType << " → " << contentType
-                                     << "), using cold restart");
+                            if (mimeChanged) {
+                                LOG_INFO("[Gapless] Cross-format change ("
+                                         << prevContentType << " → " << contentType
+                                         << "), using cold restart");
+                            } else {
+                                LOG_INFO("[Gapless] Format params changed ("
+                                         << prevTrackInfo.sampleRate << "Hz/"
+                                         << static_cast<int>(prevTrackInfo.bitDepth) << "bit/"
+                                         << static_cast<int>(prevTrackInfo.channels) << "ch → "
+                                         << trackInfo.sampleRate << "Hz/"
+                                         << static_cast<int>(trackInfo.bitDepth) << "bit/"
+                                         << static_cast<int>(trackInfo.channels) << "ch), "
+                                         << "using cold restart");
+                            }
                             int oldSlot = currentSlot.load();
                             servers[oldSlot]->signalEndOfStream();
                             upnpPtr->stop();
@@ -822,6 +865,7 @@ int main(int argc, char* argv[]) {
                     }
 
                     prevContentType = contentType;
+                    prevTrackInfo = trackInfo;
 
                     // --- Stream loop: read HTTP → write to ring buffer ---
                     uint32_t lastElapsedLog = 0;

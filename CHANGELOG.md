@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.23-beta] - 2026-04-30
+
+### Fixed
+- **Playback halts on multi-format playlist when sample rate changes** (e.g., 96kHz FLAC → 48kHz FLAC, both with same `audio/x-flac` MIME type): `SetNextAVTransportURI` was used because cross-format detection only checked MIME type. The renderer's anticipated preload (short HTTP probe of the next stream) consumed ~2MB from the ring buffer, the circular buffer overwrote those bytes before the real playback connection arrived, the current track ended prematurely with missing data, and the renderer drained its buffer before slim2UPnP queued the next URI. Now `parseTrackInfo` extracts sample rate / bit depth / channels from the FLAC STREAMINFO header, and any of those changing between successive tracks triggers the same cold restart (Stop + SetAVTransportURI + Play) that was already used for MIME-level changes since v0.1.15-beta. (Reported by Dominique)
+
+### Changed
+- Version updated to 0.1.23-beta
+
 ## [0.1.22-beta] - 2026-04-18
 
 ### Fixed
