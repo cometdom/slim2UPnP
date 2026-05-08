@@ -391,6 +391,13 @@ int main(int argc, char* argv[]) {
 
     UPnPController* upnpPtr = upnp.get();
 
+    // Start watchdog: actively probes the renderer every 10 seconds.
+    // Detects hard shutdowns (power loss, network drop, Pi reboot) where
+    // no BYEBYE announcement is sent. On probe failure, sendAction() sets
+    // m_ready=false, which causes the connection loop to drop Slimproto
+    // and show the player as offline in Roon.
+    upnp->startWatchdog(5);
+
     // ============================================
     // Start Audio HTTP Server
     // ============================================
