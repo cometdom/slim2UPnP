@@ -86,6 +86,13 @@ void UPnPController::startWatchdog(int probeIntervalSec) {
     m_watchdogThread = std::thread([this, probeIntervalSec]() {
         LOG_DEBUG("[UPnP] Watchdog started (interval=" << probeIntervalSec << "s)");
 
+        // Log throttling: avoid repetitive lines when the renderer flaps
+        // (ALIVE → probe fails → ALIVE → probe fails…) or when verbose mode
+        // is on and the renderer is healthy (DEBUG "alive" every 5s = noise).
+        constexpr int LOG_THROTTLE_SEC = 60;
+        auto lastFailLog = std::chrono::steady_clock::time_point{};
+        auto lastAliveLog = std::chrono::steady_clock::time_point{};
+
         while (m_watchdogRunning.load()) {
             // Interruptible sleep: wakes immediately on stopWatchdog()
             {
@@ -104,14 +111,21 @@ void UPnPController::startWatchdog(int probeIntervalSec) {
             // Lightweight probe: GetTransportInfo via SOAP.
             // sendAction() already sets m_ready=false on socket errors,
             // which is exactly what we need for hard-shutdown detection.
-            LOG_DEBUG("[UPnP] Watchdog probing renderer...");
             std::string state = getTransportState();
+            auto now = std::chrono::steady_clock::now();
             if (state == "UNKNOWN") {
                 // sendAction() will have already set m_ready=false if it was
-                // a socket-level failure. Log here for visibility.
-                LOG_WARN("[UPnP] Watchdog: probe failed — renderer unreachable");
-            } else {
+                // a socket-level failure. Log here for visibility, throttled
+                // so a flapping renderer doesn't flood the log.
+                if (std::chrono::duration_cast<std::chrono::seconds>(
+                        now - lastFailLog).count() >= LOG_THROTTLE_SEC) {
+                    LOG_WARN("[UPnP] Watchdog: probe failed — renderer unreachable");
+                    lastFailLog = now;
+                }
+            } else if (std::chrono::duration_cast<std::chrono::seconds>(
+                           now - lastAliveLog).count() >= LOG_THROTTLE_SEC) {
                 LOG_DEBUG("[UPnP] Watchdog: renderer alive, state=" << state);
+                lastAliveLog = now;
             }
         }
 
