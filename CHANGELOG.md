@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.24-beta] - 2026-05-11
+
+### Added
+- **Renderer availability gate + hard-shutdown watchdog** (PR #3 by hoorna/Alfred): slim2UPnP now only registers with LMS/Roon when the UPnP renderer is ready. If the renderer disappears (BYEBYE announcement or SOAP socket error), Slimproto is disconnected so Roon shows the player offline. When the renderer comes back (ALIVE), the player reconnects automatically. A background watchdog thread additionally probes the renderer every 5 seconds via `GetTransportInfo` to detect hard shutdowns (power loss, network drop, reboot) where no BYEBYE is sent — typically within 10 seconds. Audio path and Diretta protocol are untouched.
+
+### Changed
+- **Watchdog log throttling**: WARN ("probe failed — renderer unreachable") and DEBUG ("renderer alive") messages are now rate-limited to once per 60 seconds to avoid log spam during network flapping or verbose mode. Probing itself remains at the configured interval; only log output is throttled.
+- Version updated to 0.1.24-beta
+
 ## [0.1.23-beta] - 2026-04-30
 
 ### Fixed
