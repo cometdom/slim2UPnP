@@ -57,6 +57,7 @@ bool UPnPController::init(const std::string& networkInterface) {
 void UPnPController::shutdown() {
     if (!m_initialized) return;
 
+    stopWatchdog();
     m_ready.store(false);
 
     if (m_clientHandle >= 0) {
@@ -72,6 +73,61 @@ void UPnPController::shutdown() {
 std::string UPnPController::getServerIP() const {
     char* ip = UpnpGetServerIpAddress();
     return ip ? std::string(ip) : "";
+}
+
+// ============================================================================
+// Watchdog
+// ============================================================================
+
+void UPnPController::startWatchdog(int probeIntervalSec) {
+    if (m_watchdogRunning.load()) return;  // Already running
+
+    m_watchdogRunning.store(true);
+    m_watchdogThread = std::thread([this, probeIntervalSec]() {
+        LOG_DEBUG("[UPnP] Watchdog started (interval=" << probeIntervalSec << "s)");
+
+        while (m_watchdogRunning.load()) {
+            // Interruptible sleep: wakes immediately on stopWatchdog()
+            {
+                std::unique_lock<std::mutex> lock(m_watchdogMutex);
+                m_watchdogCv.wait_for(lock,
+                    std::chrono::seconds(probeIntervalSec),
+                    [this] { return !m_watchdogRunning.load(); });
+            }
+            if (!m_watchdogRunning.load()) break;
+
+            // Only probe when we believe the renderer is ready.
+            // If it's already marked not-ready (BYEBYE or previous probe failure),
+            // skip — the connection loop is already waiting for ALIVE.
+            if (!m_ready.load()) continue;
+
+            // Lightweight probe: GetTransportInfo via SOAP.
+            // sendAction() already sets m_ready=false on socket errors,
+            // which is exactly what we need for hard-shutdown detection.
+            LOG_DEBUG("[UPnP] Watchdog probing renderer...");
+            std::string state = getTransportState();
+            if (state == "UNKNOWN") {
+                // sendAction() will have already set m_ready=false if it was
+                // a socket-level failure. Log here for visibility.
+                LOG_WARN("[UPnP] Watchdog: probe failed — renderer unreachable");
+            } else {
+                LOG_DEBUG("[UPnP] Watchdog: renderer alive, state=" << state);
+            }
+        }
+
+        LOG_DEBUG("[UPnP] Watchdog stopped");
+    });
+}
+
+void UPnPController::stopWatchdog() {
+    if (!m_watchdogRunning.load()) return;
+
+    m_watchdogRunning.store(false);
+    m_watchdogCv.notify_all();  // Wake sleeping watchdog immediately
+
+    if (m_watchdogThread.joinable()) {
+        m_watchdogThread.join();
+    }
 }
 
 // ============================================================================

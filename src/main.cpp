@@ -391,6 +391,13 @@ int main(int argc, char* argv[]) {
 
     UPnPController* upnpPtr = upnp.get();
 
+    // Start watchdog: actively probes the renderer every 10 seconds.
+    // Detects hard shutdowns (power loss, network drop, Pi reboot) where
+    // no BYEBYE announcement is sent. On probe failure, sendAction() sets
+    // m_ready=false, which causes the connection loop to drop Slimproto
+    // and show the player as offline in Roon.
+    upnp->startWatchdog(5);
+
     // ============================================
     // Start Audio HTTP Server
     // ============================================
@@ -1135,6 +1142,18 @@ int main(int argc, char* argv[]) {
     // ============================================
     // Connection loop with exponential backoff
     // ============================================
+    //
+    // slim2UPnP only registers with LMS/Roon when the UPnP renderer is ready.
+    // If the renderer disappears (BYEBYE, SOAP error), Slimproto is disconnected
+    // so Roon sees the player go offline. When the renderer comes back (ALIVE),
+    // the player reconnects and becomes visible in Roon again.
+    //
+    // UPnPController already manages isReady() via:
+    //  - UPNP_DISCOVERY_ADVERTISEMENT_BYEBYE → m_ready = false
+    //  - UPNP_DISCOVERY_ADVERTISEMENT_ALIVE  → re-parse description, m_ready = true
+    //  - sendAction() SOCKET_CONNECT/SOCKET_ERROR → m_ready = false
+    //
+    // This loop adds the Slimproto connect/disconnect side of that contract.
 
     constexpr int INITIAL_BACKOFF_S = 2;
     constexpr int MAX_BACKOFF_S = 30;
@@ -1142,6 +1161,25 @@ int main(int argc, char* argv[]) {
     int connectionCount = 0;
 
     while (g_running.load(std::memory_order_acquire)) {
+
+        // --- Gate: wait for renderer to be ready before registering with LMS ---
+        if (!upnpPtr->isReady()) {
+            if (connectionCount == 0) {
+                // First startup: renderer not yet ready (should not happen — discoverRenderer
+                // already waits, but guard against a race on connectDirect path)
+                LOG_WARN("Renderer not ready at startup — waiting...");
+            } else {
+                // Renderer was lost: log once then poll silently
+                LOG_WARN("Renderer unavailable — waiting before reconnecting to LMS...");
+            }
+            while (g_running.load(std::memory_order_acquire) && !upnpPtr->isReady()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
+            if (!g_running.load(std::memory_order_acquire)) break;
+            LOG_INFO("Renderer ready — connecting to LMS");
+        }
+
+        // --- Reconnect backoff (skip on very first connection) ---
         if (connectionCount > 0) {
             LOG_WARN("Reconnecting to LMS in " << backoffS << "s...");
             if (!interruptibleSleep(backoffS)) break;
@@ -1171,7 +1209,14 @@ int main(int argc, char* argv[]) {
         }
         std::cout << std::endl;
 
+        // Monitor: stay connected while both LMS and renderer are up.
+        // When the renderer goes away (isReady() → false), drop the Slimproto
+        // connection so Roon sees the player go offline immediately.
         while (g_running.load(std::memory_order_acquire) && slimproto->isConnected()) {
+            if (!upnpPtr->isReady()) {
+                LOG_WARN("Renderer lost — disconnecting from LMS (player offline in Roon)");
+                break;  // Fall through to stopAudioThread + disconnect below
+            }
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
@@ -1182,7 +1227,16 @@ int main(int argc, char* argv[]) {
         }
 
         if (!g_running.load(std::memory_order_acquire)) break;
-        LOG_WARN("Lost connection to LMS");
+
+        if (!upnpPtr->isReady()) {
+            // Renderer-triggered disconnect: loop back to the renderer gate above.
+            // Do NOT print "Lost connection to LMS" — it was an intentional drop.
+            LOG_INFO("Waiting for renderer to come back...");
+            // Reset backoff — this is a renderer issue, not an LMS issue
+            backoffS = INITIAL_BACKOFF_S;
+        } else {
+            LOG_WARN("Lost connection to LMS");
+        }
     }
 
     // ============================================

@@ -21,6 +21,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <thread>
 #include <cstdint>
 
 class UPnPController {
@@ -104,6 +105,15 @@ public:
     const RendererInfo& getRenderer() const { return m_renderer; }
     bool isReady() const { return m_ready.load(); }
 
+    /// Start background watchdog thread that actively probes the renderer
+    /// every probIntervalSec seconds via GetTransportInfo. If the probe fails
+    /// (host gone, network loss), m_ready is set false so the Slimproto
+    /// connection loop can react. Call after successful discovery.
+    void startWatchdog(int probeIntervalSec = 10);
+
+    /// Stop the watchdog thread. Called automatically by shutdown().
+    void stopWatchdog();
+
     /// Server IP as seen by libupnp (useful for AudioHttpServer).
     std::string getServerIP() const;
 
@@ -150,6 +160,12 @@ private:
     std::atomic<bool> m_ready{false};
     bool m_initialized = false;
     mutable std::mutex m_mutex;
+
+    // --- Watchdog ---
+    std::thread m_watchdogThread;
+    std::atomic<bool> m_watchdogRunning{false};
+    std::condition_variable m_watchdogCv;
+    std::mutex m_watchdogMutex;
 
     // --- Discovery synchronization ---
     std::mutex m_discoveryMutex;
