@@ -121,7 +121,7 @@ Key messages: HELO (registration), STAT (status), strm (stream control), audg (v
 
 ### Implemented UPnP services
 - **AVTransport**: SetAVTransportURI, SetNextAVTransportURI, Play, Stop, Pause, GetPositionInfo, GetTransportInfo
-- **RenderingControl**: SetVolume (force 100%), GetVolume
+- **RenderingControl**: SetVolume (opt-in force 100% via `--set-volume-100`), GetVolume
 - **ConnectionManager**: GetProtocolInfo (check supported formats)
 
 ### Discovery
@@ -192,7 +192,7 @@ Unlike slim2diretta (which depends on the proprietary Diretta SDK), slim2UPnP ha
 
 ## Important Notes
 
-- Volume forced to 100% for bit-perfect playback
+- Volume is left untouched by default (bit-perfect at the renderer's current level). `--set-volume-100` opt-in forces 100% on connect — only for renderers that ignore volume (DirettaRendererUPnP); unsafe on a real amp/preamp (e.g. Lyngdorf)
 - No automated tests — manual testing with LMS + UPnP renderer + DAC
 - Primary target: Linux (cross-platform as stretch goal)
 - Version is tracked in `src/main.cpp` (`SLIM2UPNP_VERSION`) and `CMakeLists.txt`

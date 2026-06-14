@@ -192,8 +192,12 @@ bool UPnPController::discoverRenderer(const std::string& rendererMatch,
     // Query protocol info after discovery
     queryProtocolInfo();
 
-    // Force volume to 100% for bit-perfect playback
-    setVolume(100);
+    // Force volume to 100% only when explicitly requested (bit-perfect
+    // renderers like DirettaRendererUPnP). Off by default — forcing 100%
+    // on a real amp/preamp is dangerous.
+    if (m_forceVolume100) {
+        setVolume(100);
+    }
 
     LOG_INFO("[UPnP] Renderer found: " << m_renderer.friendlyName
              << " (" << m_renderer.uuid << ")");
@@ -250,7 +254,9 @@ bool UPnPController::connectDirect(const std::string& descriptionURL) {
     }
 
     queryProtocolInfo();
-    setVolume(100);
+    if (m_forceVolume100) {
+        setVolume(100);
+    }
 
     LOG_INFO("[UPnP] Connected to: " << m_renderer.friendlyName
              << " (" << m_renderer.uuid << ")");

@@ -35,7 +35,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.24-beta"
+#define SLIM2UPNP_VERSION "0.1.25-beta"
 
 // ============================================
 // Globals
@@ -184,6 +184,9 @@ Config parseArguments(int argc, char* argv[]) {
         else if (arg == "--no-play-calibration") {
             config.calibrateElapsed = false;
         }
+        else if (arg == "--set-volume-100") {
+            config.forceVolume100 = true;
+        }
         else if (arg == "--list-renderers" || arg == "-l") {
             config.listRenderers = true;
         }
@@ -218,6 +221,9 @@ Config parseArguments(int argc, char* argv[]) {
                       << "  --max-rate <hz>        Max sample rate (default: 1536000)\n"
                       << "  --no-dsd               Disable DSD support\n"
                       << "  --no-play-calibration  Disable renderer PLAYING-state elapsed calibration\n"
+                      << "  --set-volume-100       Force renderer volume to 100% on connect\n"
+                      << "                         (for bit-perfect renderers like DirettaRendererUPnP;\n"
+                      << "                          OFF by default — unsafe on a real amp/preamp)\n"
                       << "\n"
                       << "Logging:\n"
                       << "  -v, --verbose          Debug output (log level: DEBUG)\n"
@@ -369,6 +375,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to initialize UPnP" << std::endl;
         return 1;
     }
+    upnp->setForceVolume100(config.forceVolume100);
 
     // Connect to renderer: direct URL or SSDP discovery
     if (!config.rendererURL.empty()) {
@@ -472,6 +479,7 @@ int main(int argc, char* argv[]) {
     std::cout << "  HTTP B:     " << audioServerB->getStreamURL() << std::endl;
     std::cout << "  Max Rate:   " << config.maxSampleRate << " Hz" << std::endl;
     std::cout << "  DSD:        " << (config.dsdEnabled ? "enabled" : "disabled") << std::endl;
+    std::cout << "  Volume:     " << (config.forceVolume100 ? "forced to 100%" : "untouched") << std::endl;
     if (!config.macAddress.empty()) {
         std::cout << "  MAC:        " << config.macAddress << std::endl;
     }

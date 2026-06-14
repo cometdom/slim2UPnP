@@ -78,6 +78,12 @@ public:
 
     // --- RenderingControl ---
 
+    /// If enabled, the renderer volume is forced to 100% on connect (for
+    /// bit-perfect renderers that ignore volume, e.g. DirettaRendererUPnP).
+    /// Disabled by default: forcing 100% on a real amp/preamp is dangerous.
+    /// Call before discoverRenderer()/connectDirect().
+    void setForceVolume100(bool enable) { m_forceVolume100 = enable; }
+
     bool setVolume(int volume);
     int getVolume();
 
@@ -159,6 +165,7 @@ private:
     RendererInfo m_renderer;
     std::atomic<bool> m_ready{false};
     bool m_initialized = false;
+    bool m_forceVolume100 = false;      // see setForceVolume100()
     mutable std::mutex m_mutex;
 
     // --- Watchdog ---

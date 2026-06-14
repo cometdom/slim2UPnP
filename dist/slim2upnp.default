@@ -43,6 +43,13 @@ PLAYER_NAME=""
 # Set to "yes" to disable DSD and force PCM output
 NO_DSD=""
 
+# Set to "yes" to force the renderer volume to 100% on connect.
+# Only for bit-perfect renderers that ignore volume (e.g. DirettaRendererUPnP).
+# WARNING: do NOT enable this with a real amplifier/preamp (e.g. Lyngdorf) —
+# it would set the output to full scale. Leave empty to keep the renderer's
+# own volume untouched.
+SET_VOLUME_100=""
+
 # ── Network Options ───────────────────────────────────────────────────────
 # Force a specific network interface (e.g., eth0, enp3s0)
 INTERFACE=""

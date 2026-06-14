@@ -61,6 +61,17 @@
                         {"value": "", "label": "No (DSD enabled)"},
                         {"value": "yes", "label": "Yes (force PCM only)"}
                     ]
+                },
+                {
+                    "key": "SET_VOLUME_100",
+                    "type": "select",
+                    "label": "Force volume to 100%",
+                    "description": "Force the renderer volume to 100% on connect. ONLY for bit-perfect renderers that ignore volume (e.g. DirettaRendererUPnP). WARNING: do NOT enable with a real amplifier/preamp (e.g. Lyngdorf) — it sets the output to full scale.",
+                    "default": "",
+                    "options": [
+                        {"value": "", "label": "No (leave volume untouched)"},
+                        {"value": "yes", "label": "Yes (force 100% — bit-perfect renderers only)"}
+                    ]
                 }
             ]
         },

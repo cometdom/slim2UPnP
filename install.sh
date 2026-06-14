@@ -442,12 +442,14 @@ install_systemd() {
         # Save user values from existing config
         local saved_renderer="" saved_renderer_url="" saved_lms="" saved_player=""
         local saved_no_dsd="" saved_interface="" saved_http_port="" saved_verbose=""
+        local saved_set_volume_100=""
         . /etc/default/slim2upnp 2>/dev/null || true
         saved_renderer="$RENDERER"
         saved_renderer_url="$RENDERER_URL"
         saved_lms="$LMS_SERVER"
         saved_player="$PLAYER_NAME"
         saved_no_dsd="$NO_DSD"
+        saved_set_volume_100="$SET_VOLUME_100"
         saved_interface="$INTERFACE"
         saved_http_port="$HTTP_PORT"
         saved_verbose="$VERBOSE"
@@ -461,6 +463,7 @@ install_systemd() {
         [ -n "$saved_lms" ] && sed -i "s|^LMS_SERVER=.*|LMS_SERVER=\"$saved_lms\"|" /etc/default/slim2upnp
         [ -n "$saved_player" ] && sed -i "s|^PLAYER_NAME=.*|PLAYER_NAME=\"$saved_player\"|" /etc/default/slim2upnp
         [ -n "$saved_no_dsd" ] && sed -i "s|^NO_DSD=.*|NO_DSD=\"$saved_no_dsd\"|" /etc/default/slim2upnp
+        [ -n "$saved_set_volume_100" ] && sed -i "s|^SET_VOLUME_100=.*|SET_VOLUME_100=\"$saved_set_volume_100\"|" /etc/default/slim2upnp
         [ -n "$saved_interface" ] && sed -i "s|^INTERFACE=.*|INTERFACE=\"$saved_interface\"|" /etc/default/slim2upnp
         [ -n "$saved_http_port" ] && sed -i "s|^HTTP_PORT=.*|HTTP_PORT=\"$saved_http_port\"|" /etc/default/slim2upnp
         [ -n "$saved_verbose" ] && sed -i "s|^VERBOSE=.*|VERBOSE=\"$saved_verbose\"|" /etc/default/slim2upnp
@@ -511,12 +514,14 @@ install_openrc() {
     if [ -f /etc/conf.d/slim2upnp ]; then
         local saved_renderer="" saved_renderer_url="" saved_lms="" saved_player=""
         local saved_no_dsd="" saved_interface="" saved_http_port="" saved_verbose=""
+        local saved_set_volume_100=""
         . /etc/conf.d/slim2upnp 2>/dev/null || true
         saved_renderer="$RENDERER"
         saved_renderer_url="$RENDERER_URL"
         saved_lms="$LMS_SERVER"
         saved_player="$PLAYER_NAME"
         saved_no_dsd="$NO_DSD"
+        saved_set_volume_100="$SET_VOLUME_100"
         saved_interface="$INTERFACE"
         saved_http_port="$HTTP_PORT"
         saved_verbose="$VERBOSE"
@@ -528,6 +533,7 @@ install_openrc() {
         [ -n "$saved_lms" ] && sed -i "s|^LMS_SERVER=.*|LMS_SERVER=\"$saved_lms\"|" /etc/conf.d/slim2upnp
         [ -n "$saved_player" ] && sed -i "s|^PLAYER_NAME=.*|PLAYER_NAME=\"$saved_player\"|" /etc/conf.d/slim2upnp
         [ -n "$saved_no_dsd" ] && sed -i "s|^NO_DSD=.*|NO_DSD=\"$saved_no_dsd\"|" /etc/conf.d/slim2upnp
+        [ -n "$saved_set_volume_100" ] && sed -i "s|^SET_VOLUME_100=.*|SET_VOLUME_100=\"$saved_set_volume_100\"|" /etc/conf.d/slim2upnp
         [ -n "$saved_interface" ] && sed -i "s|^INTERFACE=.*|INTERFACE=\"$saved_interface\"|" /etc/conf.d/slim2upnp
         [ -n "$saved_http_port" ] && sed -i "s|^HTTP_PORT=.*|HTTP_PORT=\"$saved_http_port\"|" /etc/conf.d/slim2upnp
         [ -n "$saved_verbose" ] && sed -i "s|^VERBOSE=.*|VERBOSE=\"$saved_verbose\"|" /etc/conf.d/slim2upnp

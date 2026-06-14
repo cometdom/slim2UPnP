@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.25-beta] - 2026-06-14
+
+### Changed
+- **Volume is no longer forced to 100% by default** (Reported by smoothquark, issue #6): slim2UPnP previously called `SetVolume(100)` on every renderer connect, which was intended for bit-perfect renderers that ignore volume (DirettaRendererUPnP). On a real amplifier/preamp such as the Lyngdorf TDAI-3400 this drove the output to full scale on startup — potentially dangerous. The renderer's volume is now left untouched by default. Forcing 100% is available as an opt-in via the new `--set-volume-100` flag (config `SET_VOLUME_100="yes"`, also exposed in the webUI), to be used **only** with renderers that ignore volume.
+
+### Added
+- `--set-volume-100` CLI flag / `SET_VOLUME_100` config var / webUI toggle to force the renderer volume to 100% on connect (off by default).
+
 ## [0.1.24-beta] - 2026-05-11
 
 ### Added
