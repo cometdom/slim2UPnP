@@ -203,8 +203,12 @@ cmake -B build -DTARGET_MARCH=v4       # AVX-512
 ```bash
 git clone https://github.com/cometdom/slim2UPnP.git
 cd slim2UPnP
-sudo ./install.sh
+sudo ./install.sh           # downloads the latest released binary
+# or
+sudo ./install.sh --build   # compiles the current checkout instead
 ```
+
+> **Note:** plain `sudo ./install.sh` always installs the **latest published release**, regardless of which branch/commit you have checked out. To install the code you currently have (e.g. a feature/beta branch or local changes), use `sudo ./install.sh --build`, which compiles from source.
 
 ### Update to latest version
 
