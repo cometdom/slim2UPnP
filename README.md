@@ -1,4 +1,4 @@
-# slim2UPnP v0.1.24 beta
+# slim2UPnP v0.1.28 beta
 
 Slimproto to UPnP bridge with native DSD support.
 
@@ -301,6 +301,15 @@ slim2UPnP passes DSD streams directly to the renderer:
 - DSD64 through DSD512+
 
 The renderer handles all DSD decoding.
+
+## Renderer compatibility
+
+slim2UPnP serves a **single-pass, non-seekable HTTP stream** (the audio comes from a live LMS stream, so there is no random access). It sends DIDL-Lite metadata and DLNA headers (`contentFeatures.dlna.org`, `transferMode`, and `Content-Length` for DSF) so strict renderers accept the stream.
+
+- **Best results** with renderers that fetch the stream linearly (GStreamer-based), e.g. **DirettaRendererUPnP** (the primary target), Denon HEOS, and similar.
+- Renderers that fetch with **ffmpeg/libav** (`Lavf` User-Agent) may probe with multiple `Range` requests and re-open connections; since the stream cannot be re-read from an arbitrary offset, playback can be unreliable on those (the `Content-Length` hint for DSF mitigates this for DSD).
+
+slim2UPnP was created first and foremost for **DirettaRendererUPnP**; other renderers are supported on a best-effort basis.
 
 ## Gapless Playback
 
