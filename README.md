@@ -306,8 +306,10 @@ The renderer handles all DSD decoding.
 
 slim2UPnP serves a **single-pass, non-seekable HTTP stream** (the audio comes from a live LMS stream, so there is no random access). It sends DIDL-Lite metadata and DLNA headers (`contentFeatures.dlna.org`, `transferMode`, and `Content-Length` for DSF) so strict renderers accept the stream.
 
-- **Best results** with renderers that fetch the stream linearly (GStreamer-based), e.g. **DirettaRendererUPnP** (the primary target), Denon HEOS, and similar.
-- Renderers that fetch with **ffmpeg/libav** (`Lavf` User-Agent) may probe with multiple `Range` requests and re-open connections; since the stream cannot be re-read from an arbitrary offset, playback can be unreliable on those (the `Content-Length` hint for DSF mitigates this for DSD).
+- **Best results** with renderers that read the stream **linearly, in a single connection** — e.g. **DirettaRendererUPnP** (the primary target) and Denon HEOS.
+- Some renderers **probe the stream with multiple `Range` requests / reconnects** before settling (seen with certain ffmpeg/libav-based fetchers); since a live stream can't be re-read from an arbitrary offset, playback can be unreliable on those. The `Content-Length` hint for DSF mitigates this for DSD.
+
+> The deciding factor is the renderer's HTTP fetch behaviour (single linear read vs. range-probing), **not** which media toolkit it uses — decoding is entirely the renderer's own business in passthrough mode.
 
 slim2UPnP was created first and foremost for **DirettaRendererUPnP**; other renderers are supported on a best-effort basis.
 
