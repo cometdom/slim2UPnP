@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.29-beta] - 2026-06-15
+
+### Added
+- **`--forward-volume`: forward LMS volume to the renderer** (requested via issue #6, Lyngdorf): by default slim2UPnP ignores volume (bit-perfect, for renderers like DirettaRendererUPnP that do their own volume). With `--forward-volume`, LMS volume changes (`audg`) are mapped to a 0-100 percentage and pushed to the renderer's `RenderingControl::SetVolume`, so the **LMS slider controls a real amplifier/preamp** (e.g. Lyngdorf TDAI-3400). `audg` arrives in bursts during pause/resume fades, so a debounce thread coalesces them (300 ms settle) and sends a single `SetVolume` once the level stabilises — avoiding SOAP floods. Takes precedence over `--set-volume-100`. Exposed as `FORWARD_VOLUME` in the service config and the webUI.
+
+> **Note:** the gain→percent mapping is linear on the Slimproto 16.16 gain (0x10000 = 100%); LMS applies its own taper before sending it, so the renderer tracks the LMS slider monotonically but not necessarily on the renderer's own dB curve. The raw gain and computed percentage are logged (`-v`) to allow calibration. Validated structurally; field-testing on the Lyngdorf via smoothquark is pending.
+
+### Changed
+- Version updated to 0.1.29-beta
+
 ## [0.1.28-beta] - 2026-06-15
 
 ### Added

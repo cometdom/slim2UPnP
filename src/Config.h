@@ -35,6 +35,8 @@ struct Config {
                                         // OFF by default — forcing 100% on a real amp/preamp (e.g. Lyngdorf) is dangerous.
     bool didlMetadata = true;           // send DIDL-Lite metadata (with <res protocolInfo>) in Set(Next)AVTransportURI.
                                         // Needed by strict DLNA renderers (GStreamer-based, DSD). --no-didl-metadata to disable.
+    bool forwardVolume = false;         // forward LMS volume changes to the renderer's RenderingControl::SetVolume.
+                                        // OFF by default (bit-perfect). For real amps/preamps (e.g. Lyngdorf). Overrides forceVolume100.
 
     // Logging
     bool verbose = false;

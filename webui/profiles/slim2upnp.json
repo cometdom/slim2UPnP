@@ -72,6 +72,17 @@
                         {"value": "", "label": "No (leave volume untouched)"},
                         {"value": "yes", "label": "Yes (force 100% — bit-perfect renderers only)"}
                     ]
+                },
+                {
+                    "key": "FORWARD_VOLUME",
+                    "type": "select",
+                    "label": "Forward LMS volume to renderer",
+                    "description": "Forward LMS volume changes to the renderer (UPnP SetVolume), so the LMS volume slider controls a real amplifier/preamp (e.g. Lyngdorf). Leave off for bit-perfect renderers that do their own volume (DirettaRendererUPnP). Takes precedence over 'Force volume to 100%'.",
+                    "default": "",
+                    "options": [
+                        {"value": "", "label": "No (volume untouched / bit-perfect)"},
+                        {"value": "yes", "label": "Yes (LMS controls renderer volume)"}
+                    ]
                 }
             ]
         },

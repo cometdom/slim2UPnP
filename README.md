@@ -1,4 +1,4 @@
-# slim2UPnP v0.1.28 beta
+# slim2UPnP v0.1.29 beta
 
 Slimproto to UPnP bridge with native DSD support.
 
@@ -91,6 +91,8 @@ Audio:
   --no-play-calibration    Disable renderer PLAYING-state elapsed calibration
   --set-volume-100         Force renderer volume to 100% on connect
                            (bit-perfect renderers only — see note below)
+  --forward-volume         Forward LMS volume changes to the renderer
+                           (for real amps/preamps, e.g. Lyngdorf — see note below)
   --no-didl-metadata       Don't send DIDL-Lite metadata in SetAVTransportURI
                            (metadata is sent by default; needed by strict DLNA renderers)
 
@@ -108,11 +110,15 @@ Other:
 By default, slim2UPnP **does not touch the renderer's volume** — playback is
 bit-perfect at whatever level the renderer is already set to.
 
-`--set-volume-100` forces the renderer volume to 100% on connect. Use it **only**
-with bit-perfect renderers that ignore volume (e.g. DirettaRendererUPnP).
+- `--set-volume-100` forces the renderer volume to 100% on connect. Use it **only**
+  with bit-perfect renderers that ignore volume (e.g. DirettaRendererUPnP).
+- `--forward-volume` forwards LMS volume changes to the renderer (UPnP `SetVolume`),
+  so the **LMS volume slider controls a real amplifier/preamp** (e.g. Lyngdorf).
+  Takes precedence over `--set-volume-100`. Leave both off for bit-perfect renderers.
 
 > ⚠️ Do **not** enable `--set-volume-100` when the renderer is a real amplifier
-> or preamp (e.g. Lyngdorf): it would drive the output to full scale.
+> or preamp (e.g. Lyngdorf): it would drive the output to full scale. Use
+> `--forward-volume` instead.
 
 ## Building
 

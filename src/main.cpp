@@ -35,7 +35,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.28-beta"
+#define SLIM2UPNP_VERSION "0.1.29-beta"
 
 // ============================================
 // Globals
@@ -190,6 +190,9 @@ Config parseArguments(int argc, char* argv[]) {
         else if (arg == "--no-didl-metadata") {
             config.didlMetadata = false;
         }
+        else if (arg == "--forward-volume") {
+            config.forwardVolume = true;
+        }
         else if (arg == "--list-renderers" || arg == "-l") {
             config.listRenderers = true;
         }
@@ -227,6 +230,8 @@ Config parseArguments(int argc, char* argv[]) {
                       << "  --set-volume-100       Force renderer volume to 100% on connect\n"
                       << "                         (for bit-perfect renderers like DirettaRendererUPnP;\n"
                       << "                          OFF by default — unsafe on a real amp/preamp)\n"
+                      << "  --forward-volume       Forward LMS volume changes to the renderer\n"
+                      << "                         (for real amps/preamps, e.g. Lyngdorf; OFF by default)\n"
                       << "  --no-didl-metadata     Don't send DIDL-Lite metadata in SetAVTransportURI\n"
                       << "                         (metadata is sent by default; needed by strict DLNA renderers)\n"
                       << "\n"
@@ -343,6 +348,15 @@ static TrackInfo parseTrackInfo(const uint8_t* data, size_t len,
     }
 
     return info;
+}
+
+/// Map a Slimproto "new" gain (16.16 fixed-point, 0x10000 = unity = 100%) to a
+/// UPnP volume percentage (0-100). LMS applies its own taper before sending the
+/// gain, so this tracks the LMS slider monotonically (not necessarily the
+/// renderer's own dB curve). Kept isolated so the mapping is easy to calibrate.
+static int slimGainToPercent(uint32_t gain) {
+    uint64_t pct = (static_cast<uint64_t>(gain) * 100 + 32768) / 65536;
+    return static_cast<int>(pct > 100 ? 100 : pct);
 }
 
 // ============================================
@@ -496,7 +510,10 @@ int main(int argc, char* argv[]) {
     std::cout << "  HTTP B:     " << audioServerB->getStreamURL() << std::endl;
     std::cout << "  Max Rate:   " << config.maxSampleRate << " Hz" << std::endl;
     std::cout << "  DSD:        " << (config.dsdEnabled ? "enabled" : "disabled") << std::endl;
-    std::cout << "  Volume:     " << (config.forceVolume100 ? "forced to 100%" : "untouched") << std::endl;
+    std::cout << "  Volume:     "
+              << (config.forwardVolume ? "forwarded from LMS"
+                  : config.forceVolume100 ? "forced to 100%" : "untouched")
+              << std::endl;
     std::cout << "  DIDL meta:  " << (config.didlMetadata ? "enabled" : "disabled") << std::endl;
     if (!config.macAddress.empty()) {
         std::cout << "  MAC:        " << config.macAddress << std::endl;
@@ -1156,10 +1173,45 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    slimproto->onVolume([](uint32_t gainL, uint32_t gainR) {
-        LOG_DEBUG("Volume: L=0x" << std::hex << gainL << " R=0x" << gainR
-                  << std::dec << " (ignored - bit-perfect)");
-    });
+    // Volume handling. By default LMS volume is ignored (bit-perfect). With
+    // --forward-volume, push LMS volume changes to the renderer's SetVolume.
+    // audg arrives in bursts during pause/resume fades, so a debounce thread
+    // coalesces them and sends a single SetVolume once the level settles.
+    std::atomic<int> volTargetPct{-1};
+    std::atomic<long long> volLastAudgNs{0};
+    std::thread volForwardThread;
+    if (config.forwardVolume) {
+        slimproto->onVolume([&volTargetPct, &volLastAudgNs](uint32_t gainL, uint32_t gainR) {
+            int pct = slimGainToPercent(std::max(gainL, gainR));
+            volTargetPct.store(pct, std::memory_order_release);
+            volLastAudgNs.store(
+                std::chrono::steady_clock::now().time_since_epoch().count(),
+                std::memory_order_release);
+            LOG_DEBUG("Volume: L=0x" << std::hex << gainL << " R=0x" << gainR
+                      << std::dec << " -> " << pct << "% (forwarding)");
+        });
+        volForwardThread = std::thread([upnpPtr, &volTargetPct, &volLastAudgNs]() {
+            int lastSent = -1;
+            while (g_running.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                int target = volTargetPct.load(std::memory_order_acquire);
+                if (target < 0 || target == lastSent) continue;
+                auto sinceNs =
+                    std::chrono::steady_clock::now().time_since_epoch().count()
+                    - volLastAudgNs.load(std::memory_order_acquire);
+                if (sinceNs < 300'000'000LL) continue;  // let the fade settle (300 ms)
+                if (upnpPtr->isReady() && upnpPtr->setVolume(target)) {
+                    lastSent = target;
+                    LOG_INFO("[UPnP] Volume forwarded to renderer: " << target << "%");
+                }
+            }
+        });
+    } else {
+        slimproto->onVolume([](uint32_t gainL, uint32_t gainR) {
+            LOG_DEBUG("Volume: L=0x" << std::hex << gainL << " R=0x" << gainR
+                      << std::dec << " (ignored - bit-perfect)");
+        });
+    }
 
     // Helper: stop audio thread and wait
     auto stopAudioThread = [&]() {
@@ -1300,6 +1352,10 @@ int main(int argc, char* argv[]) {
     stopAudioThread();
     g_slimproto = nullptr;
     slimproto->disconnect();
+
+    if (volForwardThread.joinable()) {
+        volForwardThread.join();   // exits once g_running is false
+    }
 
     audioServerA->stop();
     audioServerB->stop();

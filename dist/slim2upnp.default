@@ -50,6 +50,12 @@ NO_DSD=""
 # own volume untouched.
 SET_VOLUME_100=""
 
+# Set to "yes" to forward LMS volume changes to the renderer (UPnP SetVolume).
+# Use this for a real amplifier/preamp (e.g. Lyngdorf) so the LMS volume slider
+# controls the renderer. Leave empty for bit-perfect renderers that do their own
+# volume (DirettaRendererUPnP). Takes precedence over SET_VOLUME_100.
+FORWARD_VOLUME=""
+
 # ── Network Options ───────────────────────────────────────────────────────
 # Force a specific network interface (e.g., eth0, enp3s0)
 INTERFACE=""

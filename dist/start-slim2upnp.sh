@@ -22,6 +22,7 @@ fi
 [ -n "$PLAYER_NAME" ]  && ARGS+=(-n "$PLAYER_NAME")
 [ "$NO_DSD" = "yes" ]  && ARGS+=(--no-dsd)
 [ "$SET_VOLUME_100" = "yes" ] && ARGS+=(--set-volume-100)
+[ "$FORWARD_VOLUME" = "yes" ]  && ARGS+=(--forward-volume)
 [ -n "$INTERFACE" ]    && ARGS+=(--interface "$INTERFACE")
 [ -n "$HTTP_PORT" ]    && ARGS+=(--http-port "$HTTP_PORT")
 [ "$VERBOSE" = "yes" ] && ARGS+=(-v)
