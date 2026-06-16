@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.31-beta] - 2026-06-16
+
+### Fixed
+- **Cross-format transition cut the tail of the previous track** (reported by Dominique; also affects Auke's mixed playlists): at a format change (e.g. FLAC→DSF, WAV→DSF), slim2UPnP does a cold restart (Stop + SetAVTransportURI + Play) instead of gapless. But `STMd` is sent ~3 s before the real end (to trigger LMS to send the next track in time), and the cold restart's `Stop` fired immediately after — while the renderer was still playing the last ~2-3 s of the current track from its buffer, cutting it off. The cold restart now **waits until the current track is expected to finish** (tracked from its duration and elapsed wall clock, capped at 6 s) before stopping. A cross-format boundary is not gapless anyway (the renderer reopens for the new format), so the wait only removes the premature cut. Same-format gapless (`SetNextAVTransportURI`) is unaffected.
+
+### Changed
+- Version updated to 0.1.31-beta
+
 ## [0.1.30-beta] - 2026-06-16
 
 ### Fixed

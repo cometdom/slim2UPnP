@@ -36,7 +36,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.30-beta"
+#define SLIM2UPNP_VERSION "0.1.31-beta"
 
 // ============================================
 // Globals
@@ -688,6 +688,10 @@ int main(int argc, char* argv[]) {
                     bool firstTrack = true;
                     std::string prevContentType;  // Track content type changes for gapless
                     TrackInfo prevTrackInfo;       // Track sample rate / bit depth changes
+                    // When the currently-playing track is expected to finish (wall clock).
+                    // A cross-format cold restart in the next iteration waits for this so
+                    // the Stop doesn't cut the current track's tail. Epoch = unknown.
+                    std::chrono::steady_clock::time_point prevTrackEndTime{};
 
                     while (true) {  // === TRACK LOOP (passthrough) ===
 
@@ -887,6 +891,26 @@ int main(int argc, char* argv[]) {
                                          << static_cast<int>(trackInfo.channels) << "ch), "
                                          << "using cold restart");
                             }
+                            // Let the current track finish playing before stopping it.
+                            // STMd is sent ~3s before the real end (to trigger LMS), but
+                            // the renderer is still playing those last seconds from its
+                            // buffer — an immediate Stop would cut the track's tail. A
+                            // cross-format boundary isn't gapless anyway (the renderer
+                            // reopens for the new format), so this wait only removes the
+                            // premature cut. Capped so a stuck clock can't hang playback.
+                            if (prevTrackEndTime != std::chrono::steady_clock::time_point{}) {
+                                auto now = std::chrono::steady_clock::now();
+                                auto until = std::min(prevTrackEndTime,
+                                                      now + std::chrono::seconds(6));
+                                if (until > now &&
+                                    audioTestRunning.load(std::memory_order_acquire)) {
+                                    LOG_DEBUG("[Gapless] Cross-format: letting current track "
+                                              "finish (" << std::chrono::duration_cast<
+                                                  std::chrono::milliseconds>(until - now).count()
+                                              << "ms) before cold restart");
+                                    std::this_thread::sleep_until(until);
+                                }
+                            }
                             int oldSlot = currentSlot.load();
                             servers[oldSlot]->signalEndOfStream();
                             upnpPtr->stop();
@@ -1063,10 +1087,22 @@ int main(int argc, char* argv[]) {
                             }
                         }
 
-                        uint32_t finalElapsed = computeElapsedMs() / 1000;
-                        LOG_INFO("[Audio] STMd at " << finalElapsed << "s (track="
+                        uint32_t finalElapsedMs = computeElapsedMs();
+                        LOG_INFO("[Audio] STMd at " << (finalElapsedMs / 1000) << "s (track="
                                  << trackDurationSec << "s)");
                         slimproto->sendStat(StatEvent::STMd);
+
+                        // Record when this track is expected to finish playing, so a
+                        // cross-format cold restart in the next iteration waits for it
+                        // (instead of cutting the tail). Unknown duration → no wait.
+                        if (trackDurationSec > 0) {
+                            uint64_t durMs = static_cast<uint64_t>(trackDurationSec) * 1000;
+                            uint64_t remainMs = durMs > finalElapsedMs ? durMs - finalElapsedMs : 0;
+                            prevTrackEndTime = std::chrono::steady_clock::now()
+                                + std::chrono::milliseconds(remainMs);
+                        } else {
+                            prevTrackEndTime = {};
+                        }
                     }
 
                     // --- Gapless: wait for next track ---
