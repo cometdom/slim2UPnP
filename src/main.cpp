@@ -26,6 +26,7 @@
 #include <atomic>
 #include <iomanip>
 #include <cstring>
+#include <cmath>
 #include <vector>
 #include <mutex>
 
@@ -35,7 +36,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.29-beta"
+#define SLIM2UPNP_VERSION "0.1.30-beta"
 
 // ============================================
 // Globals
@@ -350,13 +351,25 @@ static TrackInfo parseTrackInfo(const uint8_t* data, size_t len,
     return info;
 }
 
-/// Map a Slimproto "new" gain (16.16 fixed-point, 0x10000 = unity = 100%) to a
-/// UPnP volume percentage (0-100). LMS applies its own taper before sending the
-/// gain, so this tracks the LMS slider monotonically (not necessarily the
-/// renderer's own dB curve). Kept isolated so the mapping is easy to calibrate.
+/// Map a Slimproto "new" gain (16.16 fixed-point, 0x10000 = unity = 0 dB) to a
+/// UPnP volume percentage (0-100).
+///
+/// The gain is a *linear amplitude* multiplier, but a renderer's 0-100 volume is
+/// interpreted in *dB*. Mapping linearly (gain/65536*100) collapses everything
+/// into the bottom of the scale — e.g. LMS at 50% sends a gain near 0.02, which
+/// linearly is ~2% and drives a real amp to ~-90 dB. Instead, convert the gain
+/// to dB and spread it over an assumed attenuation span:
+///   percent = 100 + dB/ATTEN_DB * 100   (0 dB -> 100%, -ATTEN_DB dB -> 0%)
+/// This tracks the LMS slider perceptually. ATTEN_DB is the assumed renderer
+/// range; ~70 dB suits most amps/preamps. Kept isolated for easy calibration.
 static int slimGainToPercent(uint32_t gain) {
-    uint64_t pct = (static_cast<uint64_t>(gain) * 100 + 32768) / 65536;
-    return static_cast<int>(pct > 100 ? 100 : pct);
+    if (gain == 0) return 0;
+    constexpr double ATTEN_DB = 70.0;
+    double db = 20.0 * std::log10(static_cast<double>(gain) / 65536.0);
+    double pct = 100.0 + db / ATTEN_DB * 100.0;
+    if (pct < 0.0)   pct = 0.0;
+    if (pct > 100.0) pct = 100.0;
+    return static_cast<int>(pct + 0.5);
 }
 
 // ============================================

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.30-beta] - 2026-06-16
+
+### Fixed
+- **`--forward-volume`: logarithmic (dB) volume curve** (feedback from smoothquark on #6): the 0.1.29 mapping was linear on the Slimproto gain (`gain/65536*100`). But the gain is a *linear amplitude* while a renderer's 0-100 volume is interpreted in *dB*, so a linear map collapsed everything into the bottom of the scale — LMS at 50% landed near **-94 dB** on the Lyngdorf. The gain is now converted to dB and spread over an assumed ~70 dB attenuation range (`percent = 100 + dB/70*100`), so the forwarded volume tracks the LMS slider perceptually (LMS 50% ≈ 53% now, instead of ~2%). The assumed range suits most amps/preamps; the raw gain and computed percentage are still logged (`-v`) for calibration.
+
+### Changed
+- Version updated to 0.1.30-beta
+
 ## [0.1.29-beta] - 2026-06-15
 
 ### Added
