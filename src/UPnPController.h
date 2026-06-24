@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <thread>
+#include <chrono>
 #include <cstdint>
 
 class UPnPController {
@@ -188,6 +189,25 @@ private:
     std::vector<RendererInfo> m_discovered;
     std::string m_discoveryMatch;       // What we're looking for
     bool m_discoveryFound = false;
+
+    // --- Rebind state (for renderer rediscovery after UUID change) ---
+    enum class BindMode { ByMatch, ByURL };
+    BindMode m_bindMode = BindMode::ByMatch;
+    std::string m_bindURL;              // Used when BindMode::ByURL
+    std::chrono::steady_clock::time_point m_lostAt{}; // Zero unless m_ready=false
+    static constexpr int REDISCOVER_GRACE_SEC = 10;
+
+    /// Synchronous one-shot SSDP search for rendererMatch, waiting up to
+    /// waitSec for a match. Returns true if a match was found (and stored
+    /// in m_renderer). Used by both initial discoverRenderer() and the
+    /// watchdog's rediscoverIfLost().
+    bool doSearchOnce(const std::string& rendererMatch, int waitSec);
+
+    /// Called by the watchdog when m_ready is false. If we've been lost
+    /// longer than REDISCOVER_GRACE_SEC, attempts to rebind: connectDirect
+    /// for the URL path, doSearchOnce for the match path. Returns true if
+    /// the renderer was rediscovered.
+    bool rediscoverIfLost();
 
     // --- Service type constants ---
     static constexpr const char* MEDIA_RENDERER_TYPE =
