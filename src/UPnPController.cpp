@@ -103,10 +103,13 @@ void UPnPController::startWatchdog(int probeIntervalSec) {
             }
             if (!m_watchdogRunning.load()) break;
 
-            // Only probe when we believe the renderer is ready.
-            // If it's already marked not-ready (BYEBYE or previous probe failure),
-            // skip — the connection loop is already waiting for ALIVE.
-            if (!m_ready.load()) continue;
+            // If renderer is not ready, give the fast BYEBYE→ALIVE path a
+            // grace period to bring it back; once that window is exceeded,
+            // try an active rediscovery (handles UUID change on host swap).
+            if (!m_ready.load()) {
+                rediscoverIfLost();
+                continue;
+            }
 
             // Lightweight probe: GetTransportInfo via SOAP.
             // sendAction() already sets m_ready=false on socket errors,
@@ -148,6 +151,29 @@ void UPnPController::stopWatchdog() {
 // Discovery
 // ============================================================================
 
+bool UPnPController::doSearchOnce(const std::string& rendererMatch, int waitSec) {
+    {
+        std::lock_guard<std::mutex> lock(m_discoveryMutex);
+        m_discoveryMatch = rendererMatch;
+        m_discoveryFound = false;
+        m_discovered.clear();
+    }
+
+    int ret = UpnpSearchAsync(m_clientHandle, 5, MEDIA_RENDERER_TYPE, this);
+    if (ret != UPNP_E_SUCCESS) {
+        LOG_WARN("[UPnP] Search failed: " << UpnpGetErrorMessage(ret));
+        return false;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(m_discoveryMutex);
+        m_discoveryCv.wait_for(lock, std::chrono::seconds(waitSec), [this] {
+            return m_discoveryFound;
+        });
+    }
+    return m_discoveryFound;
+}
+
 bool UPnPController::discoverRenderer(const std::string& rendererMatch,
                                        std::atomic<bool>* stopSignal) {
     if (!m_initialized) return false;
@@ -155,33 +181,11 @@ bool UPnPController::discoverRenderer(const std::string& rendererMatch,
     LOG_INFO("[UPnP] Searching for renderer"
              << (rendererMatch.empty() ? " (any)" : ": " + rendererMatch) << "...");
 
-    m_discoveryMatch = rendererMatch;
-    m_discoveryFound = false;
-
     while (!m_discoveryFound) {
         // stopSignal is g_running (true = keep running, false = stop)
         if (stopSignal && !stopSignal->load()) return false;
 
-        // Clear previous results
-        {
-            std::lock_guard<std::mutex> lock(m_discoveryMutex);
-            m_discovered.clear();
-        }
-
-        int ret = UpnpSearchAsync(m_clientHandle, 5, MEDIA_RENDERER_TYPE, this);
-        if (ret != UPNP_E_SUCCESS) {
-            LOG_WARN("[UPnP] Search failed: " << UpnpGetErrorMessage(ret));
-        }
-
-        // Wait for results (up to 6 seconds)
-        {
-            std::unique_lock<std::mutex> lock(m_discoveryMutex);
-            m_discoveryCv.wait_for(lock, std::chrono::seconds(6), [this, stopSignal] {
-                return m_discoveryFound || (stopSignal && !stopSignal->load());
-            });
-        }
-
-        if (m_discoveryFound) break;
+        if (doSearchOnce(rendererMatch, 6)) break;
 
         if (stopSignal && !stopSignal->load()) return false;
 
@@ -202,6 +206,8 @@ bool UPnPController::discoverRenderer(const std::string& rendererMatch,
     LOG_INFO("[UPnP] Renderer found: " << m_renderer.friendlyName
              << " (" << m_renderer.uuid << ")");
     m_ready.store(true);
+    m_bindMode = BindMode::ByMatch;
+    m_lostAt = {};
     return true;
 }
 
@@ -263,7 +269,50 @@ bool UPnPController::connectDirect(const std::string& descriptionURL) {
     LOG_DEBUG("[UPnP] AVTransport: " << m_renderer.avTransportControlURL);
 
     m_ready.store(true);
+    m_bindMode = BindMode::ByURL;
+    m_bindURL = descriptionURL;
+    m_lostAt = {};
     return true;
+}
+
+bool UPnPController::rediscoverIfLost() {
+    if (m_ready.load()) return true;
+    if (m_lostAt.time_since_epoch().count() == 0) return false;
+
+    auto elapsed = std::chrono::steady_clock::now() - m_lostAt;
+    if (elapsed < std::chrono::seconds(REDISCOVER_GRACE_SEC)) return false;
+
+    LOG_INFO("[UPnP] Renderer lost > " << REDISCOVER_GRACE_SEC
+             << "s — attempting rediscovery (mode="
+             << (m_bindMode == BindMode::ByURL ? "URL" : "match") << ")");
+
+    bool ok = false;
+    if (m_bindMode == BindMode::ByURL) {
+        // connectDirect() handles all the bookkeeping on success.
+        ok = connectDirect(m_bindURL);
+    } else {
+        // When started without -r, pin rediscovery to the original renderer's
+        // friendly name so we don't accidentally adopt a different device.
+        const std::string searchFilter = m_discoveryMatch.empty()
+            ? m_renderer.friendlyName : m_discoveryMatch;
+        if (doSearchOnce(searchFilter, 6)) {
+            queryProtocolInfo();
+            if (m_forceVolume100) setVolume(100);
+            m_ready.store(true);
+            m_lostAt = {};
+            LOG_INFO("[UPnP] Renderer rediscovered: " << m_renderer.friendlyName
+                     << " (" << m_renderer.uuid << ")");
+            ok = true;
+        }
+    }
+
+    if (!ok) {
+        // Reset lostAt to now() so we wait another grace period before
+        // the next attempt — prevents tight retry loop on the watchdog.
+        m_lostAt = std::chrono::steady_clock::now();
+        LOG_DEBUG("[UPnP] Rediscovery attempt failed, will retry after grace period");
+    }
+    return ok;
 }
 
 std::vector<UPnPController::RendererInfo> UPnPController::scanRenderers(
@@ -422,6 +471,7 @@ int UPnPController::handleEvent(Upnp_EventType eventType, const void* event) {
             std::string(deviceId) == m_renderer.uuid) {
             LOG_WARN("[UPnP] Renderer " << m_renderer.friendlyName
                      << " announced BYEBYE — marking unavailable");
+            m_lostAt = std::chrono::steady_clock::now();
             m_ready.store(false);
         }
         break;
@@ -471,6 +521,7 @@ int UPnPController::handleEvent(Upnp_EventType eventType, const void* event) {
 
                 ixmlDocument_free(xmlDoc);
                 m_ready.store(true);
+                m_lostAt = {};
                 LOG_INFO("[UPnP] Renderer reconnected: " << m_renderer.friendlyName
                          << " control=" << m_renderer.avTransportControlURL);
             } else {
@@ -821,6 +872,7 @@ IXML_Document* UPnPController::sendAction(
             ret == UPNP_E_BAD_RESPONSE) {
             if (m_ready.load()) {
                 LOG_WARN("[UPnP] Renderer appears unreachable — marking unavailable");
+                m_lostAt = std::chrono::steady_clock::now();
                 m_ready.store(false);
             }
         }
