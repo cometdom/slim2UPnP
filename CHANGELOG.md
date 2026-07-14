@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.32-beta] - 2026-07-14
+
+### Fixed
+- **Playback freeze after rapid seeks (blocking `recv()` racing `disconnect()`)** — ported from slim2diretta v1.4.12. `HttpStreamClient::readRaw()` did a blocking `recv(..., 0)`, reached only via the poll-gated `readWithTimeout()`. On a rapid seek (`< ~2 s` apart) the Slimproto thread's `disconnect()` closes the fd — and the next `connect()` may reuse the number — *between* the `poll()` and the `recv()`, so the blocking `recv()` wedges the audio thread forever; the unbounded `audioTestThread.join()` in the seek handler then freezes the whole Slimproto loop (service restart required). Fix: `recv(..., MSG_DONTWAIT)` and treat `EAGAIN`/`EWOULDBLOCK` as "no data this tick, retry". No data is lost — `readRaw()` is reached only after a successful `poll()`. slim2UPnP shares the identical `HttpStreamClient` and the same seek-handler pattern, so it had the same latent freeze.
+
 ## [0.1.31-beta] - 2026-06-16
 
 ### Fixed
