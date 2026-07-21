@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.33-beta] - 2026-07-21
+
+### Fixed
+- **Track cut off very early on a cross-format change when the duration is unknown** (found in Auke's logs): some FLAC streams report `totalSamples = 0` in STREAMINFO (typical of streamed/Qobuz content), so slim2UPnP can't know the track length and sends `STMd` as soon as the HTTP download completes — often only 10-30 s in, since it downloads far faster than real time. If the next track then changed format, the cold restart stopped the renderer at that point, cutting the song off after a few seconds. The 0.1.31 "let the current track finish" wait didn't help here because it relies on a known duration. For unknown-duration tracks the cold restart now polls `GetTransportInfo` until the renderer reports it has finished (`STOPPED`), instead of stopping immediately. The wait honours a stop request and is capped at 10 minutes so an unresponsive renderer can't hang playback. Known-duration tracks keep the existing (cheaper) wall-clock wait.
+
 ## [0.1.32-beta] - 2026-07-14
 
 ### Fixed

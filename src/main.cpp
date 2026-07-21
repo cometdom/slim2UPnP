@@ -36,7 +36,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.32-beta"
+#define SLIM2UPNP_VERSION "0.1.33-beta"
 
 // ============================================
 // Globals
@@ -909,6 +909,38 @@ int main(int argc, char* argv[]) {
                                                   std::chrono::milliseconds>(until - now).count()
                                               << "ms) before cold restart");
                                     std::this_thread::sleep_until(until);
+                                }
+                            } else {
+                                // Unknown duration (streamed FLAC with totalSamples=0,
+                                // e.g. Qobuz): STMd was sent as soon as the download
+                                // finished, which can be minutes before the renderer
+                                // actually finishes playing — an immediate Stop would
+                                // cut the track badly. Poll until the renderer reports
+                                // it has finished. Interruptible (honours stop) and
+                                // capped so an unresponsive renderer can't hang us.
+                                constexpr int MAX_DRAIN_WAIT_SEC = 600;
+                                auto waitStart = std::chrono::steady_clock::now();
+                                bool announced = false;
+                                while (audioTestRunning.load(std::memory_order_acquire)) {
+                                    std::string st = upnpPtr->getTransportState();
+                                    // STOPPED = track finished; NO_MEDIA/UNKNOWN = nothing
+                                    // to wait for (or renderer unreachable).
+                                    if (st == "STOPPED" || st == "NO_MEDIA_PRESENT" ||
+                                        st == "UNKNOWN") {
+                                        break;
+                                    }
+                                    if (std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::steady_clock::now() - waitStart)
+                                                .count() >= MAX_DRAIN_WAIT_SEC) {
+                                        LOG_DEBUG("[Gapless] Cross-format: drain wait timed out");
+                                        break;
+                                    }
+                                    if (!announced) {
+                                        LOG_DEBUG("[Gapless] Cross-format with unknown duration "
+                                                  "— waiting for renderer to finish current track");
+                                        announced = true;
+                                    }
+                                    std::this_thread::sleep_for(std::chrono::seconds(1));
                                 }
                             }
                             int oldSlot = currentSlot.load();
