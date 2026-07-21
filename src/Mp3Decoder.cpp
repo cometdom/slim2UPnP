@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Dominique Comet (cometdom)
+// Copyright (C) 2026 Dominique COMET (cometdom)
 // This file is part of slim2UPnP. See LICENSE for details.
 
 /**
