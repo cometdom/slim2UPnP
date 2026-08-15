@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.34-beta] - 2026-08-15
+
+### Fixed
+- **`Broken pipe` / `Connection reset` playback failure on the iFi iDSD Phantom** (reported by qwertgml-crypto, issue #11): its ffmpeg/libav-based HTTP fetcher probes with `Range` requests whose byte offsets overflow 32-bit arithmetic on the renderer's side (e.g. `bytes=2147483692-`, `bytes=4294967384-`). `AudioHttpServer` previously ignored the `Range` header entirely and always answered `200 OK` with the full stream from byte 0; the renderer, having asked for a byte range, expected `206 Partial Content` and aborted the connection mid-stream once it saw a `200` instead — hence the broken pipe while writing audio. `handleClient()` now parses `Range`: a request starting at byte 0 (the only offset a single-pass live stream can serve) gets `206 Partial Content` with a proper `Content-Range` when the total size is known, or falls back to the existing `200 OK` when it isn't (RFC 7233 permits ignoring `Range` in that case). Any non-zero start — including the overflowed offsets above, which we could never seek to anyway — is now rejected immediately with a clean `416 Range Not Satisfiable` instead of attempting a doomed send.
+
 ## [0.1.33-beta] - 2026-07-21
 
 ### Fixed

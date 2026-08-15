@@ -19,8 +19,37 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <cstring>
+#include <cstdlib>
+#include <strings.h>
 #include <algorithm>
 #include <sstream>
+
+namespace {
+
+// Parses the start offset of a "Range: bytes=<start>-..." header from a raw
+// HTTP request buffer. Returns true if a Range header was present (whether
+// or not it could be parsed); *outStart is left at 0 when parsing fails,
+// which is treated the same as "start of file" by the caller.
+bool parseRangeStart(const char* reqBuf, ssize_t reqLen, uint64_t* outStart) {
+    const std::string req(reqBuf, static_cast<size_t>(reqLen));
+    size_t headerPos = std::string::npos;
+    for (size_t i = 0; i + 6 <= req.size(); ++i) {
+        if (strncasecmp(req.c_str() + i, "Range:", 6) == 0) {
+            headerPos = i + 6;
+            break;
+        }
+    }
+    if (headerPos == std::string::npos) return false;
+
+    size_t eol = req.find('\r', headerPos);
+    size_t eq = req.find('=', headerPos);
+    if (eq == std::string::npos || (eol != std::string::npos && eq > eol)) return true;
+
+    *outStart = strtoull(req.c_str() + eq + 1, nullptr, 10);
+    return true;
+}
+
+} // namespace
 
 // ============================================================================
 // Construction / Destruction
@@ -500,6 +529,25 @@ void AudioHttpServer::handleClient(int clientSocket) {
 
     LOG_DEBUG("[AudioHttpServer] Received request: " << std::string(reqBuf, std::min(reqLen, (ssize_t)80)));
 
+    // Single-pass live stream: we cannot rewind or skip ahead of the ring
+    // buffer, so only a Range starting at byte 0 is satisfiable. Some
+    // ffmpeg/libav-based renderers (e.g. iFi iDSD Phantom) probe with Range
+    // offsets that overflow 32-bit arithmetic on their side, producing huge
+    // nonsensical values (seen: 2147483692, 4294967384, ...). Reject those
+    // cleanly with 416 instead of sending a 200 body that the renderer
+    // aborts mid-stream once it notices it didn't get a 206 (issue #11).
+    uint64_t rangeStart = 0;
+    bool hasRange = parseRangeStart(reqBuf, reqLen, &rangeStart);
+    if (hasRange && rangeStart > 0) {
+        LOG_DEBUG("[AudioHttpServer] Rejecting unsatisfiable Range request (start=" << rangeStart << ")");
+        std::string resp = "HTTP/1.1 416 Range Not Satisfiable\r\n"
+                            "Content-Range: bytes */";
+        resp += (m_contentLength > 0) ? std::to_string(m_contentLength) : "*";
+        resp += "\r\nConnection: close\r\n\r\n";
+        send(clientSocket, resp.c_str(), resp.size(), MSG_NOSIGNAL);
+        return;
+    }
+
     // Wait for prebuffer to be ready (not just format — data must be in the ring buffer)
     while (!m_readyToServe.load() && m_running.load() && !m_endOfStream.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -517,8 +565,13 @@ void AudioHttpServer::handleClient(int clientSocket) {
     std::string mimeType = getMimeType();
     static const char* DLNA_CONTENT_FEATURES =
         "DLNA.ORG_OP=00;DLNA.ORG_FLAGS=01700000000000000000000000000000";
+    // A Range: bytes=0-... request is satisfiable (we always start at byte 0),
+    // but only answerable with a spec-compliant 206 if we can also state the
+    // total size in Content-Range. Otherwise fall back to a plain 200 — RFC
+    // 7233 permits the server to ignore Range and return the full entity.
+    bool partialResponse = hasRange && m_contentLength > 0;
     std::string responseHeader =
-        "HTTP/1.1 200 OK\r\n"
+        std::string(partialResponse ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n") +
         "Content-Type: " + mimeType + "\r\n"
         "Accept-Ranges: none\r\n"
         "Connection: close\r\n"
@@ -530,6 +583,10 @@ void AudioHttpServer::handleClient(int clientSocket) {
     // requests our single-pass streaming server can't satisfy.
     if (m_contentLength > 0) {
         responseHeader += "Content-Length: " + std::to_string(m_contentLength) + "\r\n";
+        if (partialResponse) {
+            responseHeader += "Content-Range: bytes 0-" + std::to_string(m_contentLength - 1) +
+                               "/" + std::to_string(m_contentLength) + "\r\n";
+        }
     }
     responseHeader += "\r\n";
 
