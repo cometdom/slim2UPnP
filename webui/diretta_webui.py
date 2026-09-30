@@ -18,7 +18,7 @@ import sys
 from html import escape
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from string import Template
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from config_parser import ShellVarConfig, CliOptsConfig
 
@@ -314,7 +314,13 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
     def _send_redirect(self, location):
         self.send_response(303)
-        self.send_header('Location', location)
+        # http.server encodes headers as latin-1; a non-ASCII flash message
+        # (e.g. a localized error, or an accented systemctl/rc-service stderr
+        # line) would otherwise raise UnicodeEncodeError and turn a 303 into
+        # a 500 (issue #99 on DirettaRendererUPnP, harmonyosnews). '/','?',
+        # '&','=' stay unescaped so the query string this method is always
+        # called with keeps working.
+        self.send_header('Location', quote(location, safe='/?&=.%~'))
         self.end_headers()
 
     def _send_json(self, data, status=200):
