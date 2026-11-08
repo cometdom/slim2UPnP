@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.36-beta] - 2026-11-08
+
+### Added
+- **Ogg FLAC internet radio no longer stops after the first song** — ported from slim2diretta v1.4.31 (reported there by Auke, Riverside Radio). Without `ogf` in the capabilities, LMS transcoded Ogg FLAC with its stock `flac --ogg | sox` rule, and `flac` stops at the end of the first logical Ogg stream, while these stations start a new one with every song. slim2UPnP now advertises `ogf`; LMS sends the stream untouched (format `f`), and the new `OggFlacUnwrapper` turns the Ogg pages back into a native FLAC stream, served to the renderer as `audio/flac` — the same kind of streamed FLAC the transcode used to produce, without decoding anything. Chained links with the same format continue the stream; a format change between links ends it cleanly (logged). Plain FLAC is passed through byte-for-byte unchanged. Verified offline: 3 chained links fed in random chunk sizes, decoded bit-exact by libFLAC and in full by FFmpeg's FLAC demuxer (as FFmpeg-based renderers read it); not yet verified on a live station.
+
 ## [0.1.35-beta] - 2026-09-30
 
 ### Fixed

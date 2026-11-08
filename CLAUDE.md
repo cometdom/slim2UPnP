@@ -39,6 +39,7 @@ slim2UPnP/
     SlimprotoClient.h/cpp     — Slimproto TCP protocol client
     SlimprotoMessages.h       — Binary protocol message structs
     HttpStreamClient.h/cpp    — HTTP audio stream fetcher
+    OggFlacUnwrapper.h/cpp    — Ogg FLAC → native FLAC byte stream, no decoding (v0.1.36)
     Config.h                  — Configuration struct
     LogLevel.h                — Logging macros (LOG_ERROR/WARN/INFO/DEBUG)
   CMakeLists.txt              — Build system (only libupnp required)
@@ -136,6 +137,7 @@ Key messages: HELO (registration), STAT (status), strm (stream control), audg (v
 ### Passthrough
 - **Content-Type mapping is critical** — LMS sends `audio/flac`, `audio/x-wav`, `application/octet-stream` etc.; must map to correct MIME type for SetAVTransportURI
 - **FLAC/DSF header parsing for duration only** — do NOT decode, just read metadata for STMd timing
+- **Ogg FLAC radio (v0.1.36)** — we advertise `ogf`, so LMS passes Ogg FLAC through untouched as format `f` instead of transcoding it with `flac --ogg | sox` (which stops after the first song of a chained radio stream). `OggFlacUnwrapper` (fed by `forwardAudio()` in the passthrough loop, only for format `f`; anything not starting with `OggS` passes through untouched) turns the Ogg pages into one native FLAC stream: `fLaC` + STREAMINFO from the first link (total samples and MD5 cleared → duration unknown), then only FLAC frame packets. Same-format chained links continue the stream; a format change ends it (`ended()` → treated as HTTP EOF). The MIME is forced to `audio/flac`, so renderers get the same kind of streamed FLAC as from the old transcode. FFmpeg-based renderers log "sample/frame number mismatch in adjacent frames" once per link (frame numbers restart per song): harmless. Same page logic as slim2diretta's `OggFlacDecoder` (v1.4.31).
 - **Wall clock elapsed** — use `std::chrono::steady_clock` since there are no decoded samples to count. Calibrated against `GetTransportInfo` once per track: poll every 150ms after `Play()` until state == "PLAYING", then reset the start time to that moment. Corrects the 1-5s drift caused by renderer startup latency (buffering, DAC ramp-up). Disabled with `--no-play-calibration`.
 
 ### Raw PCM from Roon (format=p)
