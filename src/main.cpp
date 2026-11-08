@@ -16,6 +16,7 @@
 #include "HttpStreamClient.h"
 #include "AudioHttpServer.h"
 #include "UPnPController.h"
+#include "OggFlacUnwrapper.h"
 #include "LogLevel.h"
 
 #include <iostream>
@@ -36,7 +37,7 @@
 #include <unistd.h>
 #include <poll.h>
 
-#define SLIM2UPNP_VERSION "0.1.35-beta"
+#define SLIM2UPNP_VERSION "0.1.36-beta"
 
 // ============================================
 // Globals
@@ -748,27 +749,55 @@ int main(int argc, char* argv[]) {
                     size_t prebuffered = 0;
                     bool httpEof = false;
 
+                    // Ogg FLAC (radio): LMS sends it as format 'f' since we
+                    // advertise "ogf". Unwrapped here into a native FLAC stream,
+                    // so the renderer gets plain streamed FLAC. Anything not
+                    // starting with "OggS" passes through untouched.
+                    const bool unwrapOgg = (fmtCode == 'f');
+                    OggFlacUnwrapper oggUnwrap;
+                    std::vector<uint8_t> fwdBuf;
+                    // Forward stream bytes to the HTTP server; returns bytes written
+                    auto forwardAudio = [&](const uint8_t* data, size_t len) -> size_t {
+                        const uint8_t* fwd = data;
+                        size_t fwdLen = len;
+                        if (unwrapOgg) {
+                            fwdBuf.clear();
+                            if (data) oggUnwrap.feed(data, len, fwdBuf);
+                            else oggUnwrap.finish(fwdBuf);
+                            fwd = fwdBuf.data();
+                            fwdLen = fwdBuf.size();
+                        }
+                        if (fwdLen == 0) return 0;
+                        // Capture first bytes for duration parsing
+                        if (headerLen < sizeof(headerBuf)) {
+                            size_t copy = std::min(fwdLen, sizeof(headerBuf) - headerLen);
+                            std::memcpy(headerBuf + headerLen, fwd, copy);
+                            headerLen += copy;
+                        }
+                        audioServerPtr->writeAudio(fwd, fwdLen);
+                        return fwdLen;
+                    };
+
                     while (prebuffered < PREBUFFER_BYTES &&
                            audioTestRunning.load(std::memory_order_acquire) && !httpEof) {
                         ssize_t n = httpStream->readWithTimeout(httpBuf, sizeof(httpBuf), 100);
                         if (n > 0) {
-                            // Capture first bytes for duration parsing
-                            if (headerLen < sizeof(headerBuf)) {
-                                size_t copy = std::min(static_cast<size_t>(n),
-                                                       sizeof(headerBuf) - headerLen);
-                                std::memcpy(headerBuf + headerLen, httpBuf, copy);
-                                headerLen += copy;
-                            }
-                            audioServerPtr->writeAudio(httpBuf, static_cast<size_t>(n));
+                            prebuffered += forwardAudio(httpBuf, static_cast<size_t>(n));
                             totalBytes += n;
-                            prebuffered += n;
+                            if (oggUnwrap.ended()) httpEof = true;
                         } else if (n < 0 || !httpStream->isConnected()) {
                             httpEof = true;
+                            if (unwrapOgg) prebuffered += forwardAudio(nullptr, 0);
                         }
                     }
 
                     if (prebuffered == 0 || !audioTestRunning.load(std::memory_order_acquire)) {
                         break;
+                    }
+
+                    if (oggUnwrap.isOgg()) {
+                        contentType = "audio/flac";
+                        audioServerPtr->setPassthroughMime(contentType);
                     }
 
                     // Auto-detect format from magic bytes when Content-Type is generic
@@ -1029,11 +1058,13 @@ int main(int argc, char* argv[]) {
                     while (audioTestRunning.load(std::memory_order_acquire) && !httpEof) {
                         ssize_t n = httpStream->readWithTimeout(httpBuf, sizeof(httpBuf), 10);
                         if (n > 0) {
-                            audioServerPtr->writeAudio(httpBuf, static_cast<size_t>(n));
+                            forwardAudio(httpBuf, static_cast<size_t>(n));
                             totalBytes += n;
                             slimproto->updateStreamBytes(totalBytes);
+                            if (oggUnwrap.ended()) httpEof = true;
                         } else if (n < 0 || !httpStream->isConnected()) {
                             httpEof = true;
+                            if (unwrapOgg) forwardAudio(nullptr, 0);
                         }
 
                         // Report ring buffer state to LMS so it knows we're consuming data.

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(slim2upnp VERSION 0.1.35)
+project(slim2upnp VERSION 0.1.36)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -120,8 +120,9 @@ set(SLIM2UPNP_SOURCES
     src/HttpStreamClient.cpp
     src/AudioHttpServer.cpp
     src/UPnPController.cpp
+    src/OggFlacUnwrapper.cpp
 )
-# Passthrough mode: no decoders needed
+# Passthrough mode: no decoders needed (Ogg FLAC is only unwrapped, not decoded)
 
 # ============================================
 # Create Executable
